@@ -13,12 +13,20 @@ bl_info = {
 import bpy
 import bmesh
 from collections import defaultdict
+from mathutils import Vector
 
 class CelticOperator(bpy.types.Operator):
     bl_idname = "object.celtic_operator"
     bl_label = "Celtic Operator"
+    bl_options = {'REGISTER', 'UNDO', 'PRESET'}
 
-    total = bpy.props.IntProperty(name="Steps", default=2, min=1, max=100)
+    weave_up = bpy.props.FloatProperty(name="Weave Up")
+    weave_down = bpy.props.FloatProperty(name="Weave Down")
+
+    @classmethod
+    def poll(cls, context):
+        ob = context.active_object
+        return ob is not None and ob.mode == 'OBJECT'
 
     def execute(self, context):
         obj = context.active_object
@@ -69,7 +77,10 @@ class CelticOperator(bpy.types.Operator):
                     current_spline.bezier_points.add()
                 first = False
                 point = current_spline.bezier_points[-1]
-                point.co = midpoints[loop.edge.index]
+                midpoint = Vector(midpoints[loop.edge.index])
+                normal = Vector(loop.calc_normal())
+                offset = self.weave_up if forward else self.weave_down
+                point.co = midpoint+offset*normal
                 point.handle_left_type = "AUTO"
                 point.handle_right_type = "AUTO"
 
