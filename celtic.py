@@ -11,6 +11,8 @@ bl_info = {
     "category": "Add Mesh"}
 
 import bpy
+import bmesh
+from collections import defaultdict
 
 class CelticOperator(bpy.types.Operator):
     bl_idname = "object.celtic_operator"
@@ -22,31 +24,61 @@ class CelticOperator(bpy.types.Operator):
         obj = context.active_object
         assert obj.type == "MESH"
         mesh = bpy.data.meshes.new("Celtic")
+        curve = bpy.data.curves.new("Celtic","CURVE")
+        curve.dimensions = "3D"
         obj = obj.data
-        verts = []
-        edges = []
-        faces = []
+        midpoints = []
+        # Compute all the midpoints
         for e in obj.edges.values():
             v1 = obj.vertices[e.vertices[0]]
             v2 = obj.vertices[e.vertices[1]]
             m = tuple((v1.co[i]+v2.co[i])/2 for i in range(3))
-            verts.append(m)
-        for f in obj.polygons.values():
-            #assert len(f.vertices) == 3, repr(f.vertices)
-            fout = []
-            for i in range(f.loop_start,f.loop_start+f.loop_total):
-                n = i+1
-                if n == f.loop_start+f.loop_total: n = f.loop_start
-                l1 = obj.loops[i]
-                l2 = obj.loops[n]
-                edges.append((l1.edge_index,l2.edge_index))
-                fout.append(l1.edge_index)
-            #faces.append(fout)
+            midpoints.append(m)
+        bm = bmesh.new()
+        bm.from_mesh(obj)
+        loops_entered = defaultdict(lambda:False)
+        loops_exited = defaultdict(lambda:False)
+        def make_loop(loop, forward):
+            current_spline = curve.splines.new("BEZIER")
+            current_spline.use_cyclic_u = True
+            first = True
+            while True:
+                if forward:
+                    if loops_exited[loop]: break
+                    loops_exited[loop] = True
+                    loop = loop.link_loop_next
+                    assert loops_entered[loop] == False
+                    loops_entered[loop] = True
+                    v = loop.vert.index
+                    # Find next radial loop
+                    assert loop.link_loops[0] != loop
+                    loop = loop.link_loops[0]
+                    forward = loop.vert.index == v
+                else:
+                    if loops_entered[loop]: break
+                    loops_entered[loop] = True
+                    v = loop.vert.index
+                    loop = loop.link_loop_prev
+                    assert loops_exited[loop] == False
+                    loops_exited[loop] = True
+                    # Find next radial loop
+                    assert loop.link_loops[-1] != loop
+                    loop = loop.link_loops[-1]
+                    forward = loop.vert.index == v
+                if not first:
+                    current_spline.bezier_points.add()
+                first = False
+                point = current_spline.bezier_points[-1]
+                point.co = midpoints[loop.edge.index]
+                point.handle_left_type = "AUTO"
+                point.handle_right_type = "AUTO"
 
-        mesh.from_pydata(verts, edges, faces)
-        mesh.update()
+        for face in bm.faces:
+            for loop in face.loops:
+                if not loops_exited[loop]: make_loop(loop, True)
+                if not loops_entered[loop]: make_loop(loop, False)
         from bpy_extras import object_utils
-        object_utils.object_data_add(context, mesh, operator=None)
+        object_utils.object_data_add(context, curve, operator=None)
         return {'FINISHED'}
 
 def register():
