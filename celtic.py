@@ -14,6 +14,7 @@ import bpy
 import bmesh
 from collections import defaultdict
 from mathutils import Vector
+from math import pi,sin,cos
 
 class CelticOperator(bpy.types.Operator):
     bl_idname = "object.celtic_operator"
@@ -22,6 +23,12 @@ class CelticOperator(bpy.types.Operator):
 
     weave_up = bpy.props.FloatProperty(name="Weave Up")
     weave_down = bpy.props.FloatProperty(name="Weave Down")
+    crossing_angle = bpy.props.FloatProperty(name="Crossing Angle",
+                                             min=0,max=pi/2,
+                                             subtype="ANGLE",
+                                             unit="ROTATION")
+    crossing_strength = bpy.props.FloatProperty(name="Crossing Strength")
+
 
     @classmethod
     def poll(cls, context):
@@ -29,6 +36,8 @@ class CelticOperator(bpy.types.Operator):
         return ob is not None and ob.mode == 'OBJECT'
 
     def execute(self, context):
+        s = sin(self.crossing_angle) * self.crossing_strength
+        c = cos(self.crossing_angle) * self.crossing_strength
         obj = context.active_object
         assert obj.type == "MESH"
         mesh = bpy.data.meshes.new("Celtic")
@@ -46,6 +55,8 @@ class CelticOperator(bpy.types.Operator):
         bm.from_mesh(obj)
         loops_entered = defaultdict(lambda:False)
         loops_exited = defaultdict(lambda:False)
+        def ignorable_loop(loop):
+            return len(loop.link_loops)==0
         def make_loop(loop, forward):
             current_spline = curve.splines.new("BEZIER")
             current_spline.use_cyclic_u = True
@@ -54,10 +65,14 @@ class CelticOperator(bpy.types.Operator):
                 if forward:
                     if loops_exited[loop]: break
                     loops_exited[loop] = True
-                    loop = loop.link_loop_next
+                    # Follow the face around, ignoring boundary edges
+                    while True:
+                        loop = loop.link_loop_next
+                        if not ignorable_loop(loop): break
                     assert loops_entered[loop] == False
                     loops_entered[loop] = True
                     v = loop.vert.index
+                    prev_loop = loop
                     # Find next radial loop
                     assert loop.link_loops[0] != loop
                     loop = loop.link_loops[0]
@@ -65,10 +80,14 @@ class CelticOperator(bpy.types.Operator):
                 else:
                     if loops_entered[loop]: break
                     loops_entered[loop] = True
-                    v = loop.vert.index
-                    loop = loop.link_loop_prev
+                    # Follow the face around, ignoring boundary edges
+                    while True:
+                        v = loop.vert.index
+                        loop = loop.link_loop_prev
+                        if not ignorable_loop(loop): break
                     assert loops_exited[loop] == False
                     loops_exited[loop] = True
+                    prev_loop = loop
                     # Find next radial loop
                     assert loop.link_loops[-1] != loop
                     loop = loop.link_loops[-1]
@@ -78,14 +97,27 @@ class CelticOperator(bpy.types.Operator):
                 first = False
                 point = current_spline.bezier_points[-1]
                 midpoint = Vector(midpoints[loop.edge.index])
-                normal = Vector(loop.calc_normal())
+                normal = loop.calc_normal() + prev_loop.calc_normal()
+                normal.normalize()
+                tangent = loop.link_loop_next.vert.co - loop.vert.co
+                tangent.normalize()
+                binormal = normal.cross(tangent).normalized()
+                if not forward: tangent *= -1
                 offset = self.weave_up if forward else self.weave_down
-                point.co = midpoint+offset*normal
-                point.handle_left_type = "AUTO"
-                point.handle_right_type = "AUTO"
+                midpoint += offset * normal
+                point.co = midpoint
+                if False:
+                    point.handle_left_type = "AUTO"
+                    point.handle_right_type = "AUTO"
+                else:
+                    point.handle_left_type = "ALIGNED"
+                    point.handle_right_type = "ALIGNED"
+                    point.handle_left = midpoint - s * binormal - c * tangent
+                    point.handle_right = midpoint + s * binormal + c * tangent
 
         for face in bm.faces:
             for loop in face.loops:
+                if ignorable_loop(loop): continue
                 if not loops_exited[loop]: make_loop(loop, True)
                 if not loops_entered[loop]: make_loop(loop, False)
         from bpy_extras import object_utils
