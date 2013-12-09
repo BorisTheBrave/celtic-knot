@@ -21,14 +21,31 @@ class CelticOperator(bpy.types.Operator):
     bl_label = "Celtic Operator"
     bl_options = {'REGISTER', 'UNDO', 'PRESET'}
 
-    weave_up = bpy.props.FloatProperty(name="Weave Up")
-    weave_down = bpy.props.FloatProperty(name="Weave Down")
+    weave_up = bpy.props.FloatProperty(name="Weave Up",
+                                       description="Distance to shift curve upwards over knots",
+                                       subtype="DISTANCE",
+                                       unit="LENGTH")
+    weave_down = bpy.props.FloatProperty(name="Weave Down",
+                                         description="Distance to shift curve downward under knots",
+                                         subtype="DISTANCE",
+                                         unit="LENGTH")
+    handle_types = [("ALIGNED","Aligned","Points at a fixed crossing angle"),
+                    ("AUTO","Auto","Automatic control points")]
+    handle_type = bpy.props.EnumProperty(items=handle_types,
+                                         name="Handle Type",
+                                         description="Controls what type the bezier control points use",
+                                         default="AUTO")
     crossing_angle = bpy.props.FloatProperty(name="Crossing Angle",
+                                             description="Aligned only: the angle between curves in a knot",
+                                             default=pi/4,
                                              min=0,max=pi/2,
                                              subtype="ANGLE",
                                              unit="ROTATION")
-    crossing_strength = bpy.props.FloatProperty(name="Crossing Strength")
-
+    crossing_strength = bpy.props.FloatProperty(name="Crossing Strength",
+                                                description="Aligned only: strenth of bezier control points",
+                                                soft_min=0,
+                                                subtype="DISTANCE",
+                                                unit="LENGTH")
 
     @classmethod
     def poll(cls, context):
@@ -106,14 +123,10 @@ class CelticOperator(bpy.types.Operator):
                 offset = self.weave_up if forward else self.weave_down
                 midpoint += offset * normal
                 point.co = midpoint
-                if False:
-                    point.handle_left_type = "AUTO"
-                    point.handle_right_type = "AUTO"
-                else:
-                    point.handle_left_type = "ALIGNED"
-                    point.handle_right_type = "ALIGNED"
-                    point.handle_left = midpoint - s * binormal - c * tangent
-                    point.handle_right = midpoint + s * binormal + c * tangent
+                point.handle_left_type = self.handle_type
+                point.handle_right_type = self.handle_type
+                point.handle_left = midpoint - s * binormal - c * tangent
+                point.handle_right = midpoint + s * binormal + c * tangent
 
         for face in bm.faces:
             for loop in face.loops:
