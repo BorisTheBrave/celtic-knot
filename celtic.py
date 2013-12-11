@@ -46,34 +46,46 @@ class CelticOperator(bpy.types.Operator):
                                                 soft_min=0,
                                                 subtype="DISTANCE",
                                                 unit="LENGTH")
+    thickness = bpy.props.FloatProperty(name="Thickness",
+                                        description="Radius of tube around curve (zero disables)",
+                                        soft_min=0,
+                                        subtype="DISTANCE",
+                                        unit="LENGTH")
 
     @classmethod
     def poll(cls, context):
         ob = context.active_object
-        return ob is not None and ob.mode == 'OBJECT'
+        return ob is not None and ob.mode == 'OBJECT' and obj.type == "MESH"
 
     def execute(self, context):
         s = sin(self.crossing_angle) * self.crossing_strength
         c = cos(self.crossing_angle) * self.crossing_strength
         obj = context.active_object
-        assert obj.type == "MESH"
-        mesh = bpy.data.meshes.new("Celtic")
         curve = bpy.data.curves.new("Celtic","CURVE")
         curve.dimensions = "3D"
+        curve.twist_mode = "MINIMUM"
         obj = obj.data
         midpoints = []
-        # Compute all the midpoints
+        # Compute all the midpoints of each edge
         for e in obj.edges.values():
             v1 = obj.vertices[e.vertices[0]]
             v2 = obj.vertices[e.vertices[1]]
             m = tuple((v1.co[i]+v2.co[i])/2 for i in range(3))
             midpoints.append(m)
+
         bm = bmesh.new()
         bm.from_mesh(obj)
+        # Stores which loops the curve has already passed through
         loops_entered = defaultdict(lambda:False)
         loops_exited = defaultdict(lambda:False)
+        # Loops on the boundary of a surface
         def ignorable_loop(loop):
             return len(loop.link_loops)==0
+        # Starting at loop, build a curve one vertex at a time
+        # until we start where we came from
+        # Forward means that for any two edges the loop crosses
+        # sharing a face, it is passing through in clockwise order
+        # else anticlockwise
         def make_loop(loop, forward):
             current_spline = curve.splines.new("BEZIER")
             current_spline.use_cyclic_u = True
@@ -128,13 +140,33 @@ class CelticOperator(bpy.types.Operator):
                 point.handle_left = midpoint - s * binormal - c * tangent
                 point.handle_right = midpoint + s * binormal + c * tangent
 
+        # Attempt to start a loop at each untouched loop in the entire mesh
         for face in bm.faces:
             for loop in face.loops:
                 if ignorable_loop(loop): continue
                 if not loops_exited[loop]: make_loop(loop, True)
                 if not loops_entered[loop]: make_loop(loop, False)
+        # Create an object from the curve
         from bpy_extras import object_utils
         object_utils.object_data_add(context, curve, operator=None)
+        curve_obj = context.active_object
+        # If thick, then give it a bevel_object and convert to mesh
+        if self.thickness > 0:
+            bpy.ops.curve.primitive_bezier_circle_add()
+            bpy.ops.transform.resize(value=(self.thickness,)*3)
+            circle = context.active_object
+            curve.bevel_object = circle
+            curve_obj.select = True
+            context.scene.objects.active = curve_obj
+            # For some reason only works with keep_original=True
+            bpy.ops.object.convert(target="MESH", keep_original=True)
+            new_obj = context.scene.objects.active
+            new_obj.select = False
+            curve_obj.select = True
+            circle.select = True
+            bpy.ops.object.delete()
+            new_obj.select = True
+            context.scene.objects.active = new_obj
         return {'FINISHED'}
 
 def register():
