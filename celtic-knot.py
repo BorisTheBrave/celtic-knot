@@ -1,14 +1,36 @@
+# Blender plugin for generating celtic knot curves from 3d meshes
+# See README for more information
+
+# Copyright (c) 2013 Adam Newgas
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
 bl_info = {
-    "name": "Celtic",
+    "name": "Celtic Knot",
     "description": "",
     "author": "Adam Newgas",
-    "version": (0,0),
+    "version": (0,1,0),
     "blender": (2, 68, 0),
-    "location": "View3D > Add > Mesh",
-    "warning": "", # used for warning icon and text in addons panel
-    "wiki_url": "http://wiki.blender.org/index.php/Extensions:2.5/Py/"
-                "Scripts/My_Script",
-    "category": "Add Mesh"}
+    "location": "View3D > Add > Curve",
+    "warning": "",
+    "wiki_url": "",
+    "category": "Add Curve"}
 
 import bpy
 import bmesh
@@ -16,9 +38,9 @@ from collections import defaultdict
 from mathutils import Vector
 from math import pi,sin,cos
 
-class CelticOperator(bpy.types.Operator):
-    bl_idname = "object.celtic_operator"
-    bl_label = "Celtic Operator"
+class CelticKnotOperator(bpy.types.Operator):
+    bl_idname = "object.celtic_knot_operator"
+    bl_label = "Celtic Knot"
     bl_options = {'REGISTER', 'UNDO', 'PRESET'}
 
     weave_up = bpy.props.FloatProperty(name="Weave Up",
@@ -55,12 +77,16 @@ class CelticOperator(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         ob = context.active_object
-        return ob is not None and ob.mode == 'OBJECT' and obj.type == "MESH"
+        #return True
+        return ((ob is not None) and
+                (ob.mode == "OBJECT") and
+                (ob.type == "MESH") and
+                (context.mode == "OBJECT"))
 
     def execute(self, context):
         s = sin(self.crossing_angle) * self.crossing_strength
         c = cos(self.crossing_angle) * self.crossing_strength
-        obj = context.active_object
+        orig_obj = obj = context.active_object
         curve = bpy.data.curves.new("Celtic","CURVE")
         curve.dimensions = "3D"
         curve.twist_mode = "MINIMUM"
@@ -150,6 +176,7 @@ class CelticOperator(bpy.types.Operator):
         from bpy_extras import object_utils
         object_utils.object_data_add(context, curve, operator=None)
         curve_obj = context.active_object
+        context.scene.objects.active = orig_obj
         # If thick, then give it a bevel_object and convert to mesh
         if self.thickness > 0:
             bpy.ops.curve.primitive_bezier_circle_add()
@@ -169,8 +196,19 @@ class CelticOperator(bpy.types.Operator):
             context.scene.objects.active = new_obj
         return {'FINISHED'}
 
+def menu_func(self, context):
+    self.layout.operator(CelticKnotOperator.bl_idname,
+                         text="Celtic Knot From Mesh",
+                         icon='PLUGIN')
+
 def register():
-    bpy.utils.register_class(CelticOperator)
+    bpy.utils.register_module(__name__)
+    bpy.types.INFO_MT_curve_add.append(menu_func)
+
+
+def unregister():
+    bpy.types.INFO_MT_curve_add.remove(menu_func)
+    bpy.utils.unregister_module(__name__)
 
 if __name__ == "__main__":
     register()
