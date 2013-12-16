@@ -1,6 +1,8 @@
 # Blender plugin for generating celtic knot curves from 3d meshes
 # See README for more information
-
+#
+# The MIT License (MIT)
+#
 # Copyright (c) 2013 Adam Newgas
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
