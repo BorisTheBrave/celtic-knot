@@ -76,6 +76,8 @@ class CelticKnotOperator(bpy.types.Operator):
                                         subtype="DISTANCE",
                                         unit="LENGTH")
 
+    handle_type_map = {"AUTO":"AUTOMATIC","ALIGNED":"ALIGNED"}
+
     @classmethod
     def poll(cls, context):
         ob = context.active_object
@@ -86,8 +88,13 @@ class CelticKnotOperator(bpy.types.Operator):
                 (context.mode == "OBJECT"))
 
     def execute(self, context):
+        # Cache some values
         s = sin(self.crossing_angle) * self.crossing_strength
         c = cos(self.crossing_angle) * self.crossing_strength
+        handle_type = self.handle_type
+        weave_up = self.weave_up
+        weave_down = self.weave_down
+        # Create the new object
         orig_obj = obj = context.active_object
         curve = bpy.data.curves.new("Celtic","CURVE")
         curve.dimensions = "3D"
@@ -98,7 +105,7 @@ class CelticKnotOperator(bpy.types.Operator):
         for e in obj.edges.values():
             v1 = obj.vertices[e.vertices[0]]
             v2 = obj.vertices[e.vertices[1]]
-            m = tuple((v1.co[i]+v2.co[i])/2 for i in range(3))
+            m = (v1.co+v2.co) / 2.0
             midpoints.append(m)
 
         bm = bmesh.new()
@@ -118,6 +125,12 @@ class CelticKnotOperator(bpy.types.Operator):
             current_spline = curve.splines.new("BEZIER")
             current_spline.use_cyclic_u = True
             first = True
+            # Data for the spline
+            # It's faster to store in an array and load into blender
+            # at once
+            cos = []
+            handle_lefts = []
+            handle_rights = []
             while True:
                 if forward:
                     if loops_exited[loop]: break
@@ -152,21 +165,28 @@ class CelticKnotOperator(bpy.types.Operator):
                 if not first:
                     current_spline.bezier_points.add()
                 first = False
-                point = current_spline.bezier_points[-1]
-                midpoint = Vector(midpoints[loop.edge.index])
+                midpoint = midpoints[loop.edge.index]
                 normal = loop.calc_normal() + prev_loop.calc_normal()
                 normal.normalize()
-                tangent = loop.link_loop_next.vert.co - loop.vert.co
-                tangent.normalize()
-                binormal = normal.cross(tangent).normalized()
-                if not forward: tangent *= -1
-                offset = self.weave_up if forward else self.weave_down
+                offset = weave_up if forward else weave_down
                 midpoint += offset * normal
-                point.co = midpoint
-                point.handle_left_type = self.handle_type
-                point.handle_right_type = self.handle_type
-                point.handle_left = midpoint - s * binormal - c * tangent
-                point.handle_right = midpoint + s * binormal + c * tangent
+                cos.extend(midpoint)
+                if handle_type != "AUTO":
+                    tangent = loop.link_loop_next.vert.co - loop.vert.co
+                    tangent.normalize()
+                    binormal = normal.cross(tangent).normalized()
+                    if not forward: tangent *= -1
+                    s_binormal = s * binormal
+                    c_tangent = c * tangent
+                    handle_left = midpoint - s_binormal - c_tangent
+                    handle_right = midpoint + s_binormal + c_tangent
+                    handle_lefts.extend(handle_left)
+                    handle_rights.extend(handle_right)
+            points = current_spline.bezier_points
+            points.foreach_set("co",cos)
+            if handle_type != "AUTO":
+                points.foreach_set("handle_left",handle_lefts)
+                points.foreach_set("handle_right",handle_rights)
 
         # Attempt to start a loop at each untouched loop in the entire mesh
         for face in bm.faces:
@@ -177,6 +197,12 @@ class CelticKnotOperator(bpy.types.Operator):
         # Create an object from the curve
         from bpy_extras import object_utils
         object_utils.object_data_add(context, curve, operator=None)
+        # Set the handle type (this is faster than setting it pointwise)
+        bpy.ops.object.editmode_toggle()
+        bpy.ops.curve.select_all(action="SELECT")
+        bpy.ops.curve.handle_type_set(type=self.handle_type_map[handle_type])
+        bpy.ops.object.editmode_toggle()
+        # Restore active selection
         curve_obj = context.active_object
         context.scene.objects.active = orig_obj
         # If thick, then give it a bevel_object and convert to mesh
