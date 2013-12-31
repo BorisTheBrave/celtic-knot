@@ -31,7 +31,7 @@ bl_info = {
     "blender": (2, 68, 0),
     "location": "View3D > Add > Curve",
     "warning": "",
-    "wiki_url": "",
+    "wiki_url": "https://github.com/BorisTheBrave/celtic-knot/wiki",
     "category": "Add Curve"}
 
 import bpy
