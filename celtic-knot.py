@@ -27,7 +27,7 @@ bl_info = {
     "name": "Celtic Knot",
     "description": "",
     "author": "Adam Newgas",
-    "version": (0,1,0),
+    "version": (0,1,1),
     "blender": (2, 68, 0),
     "location": "View3D > Add > Curve",
     "warning": "",
@@ -201,6 +201,8 @@ class CelticKnotOperator(bpy.types.Operator):
         bpy.ops.object.editmode_toggle()
         bpy.ops.curve.select_all(action="SELECT")
         bpy.ops.curve.handle_type_set(type=self.handle_type_map[handle_type])
+        # Some blender versions lack the default
+        bpy.ops.curve.radius_set(radius=1.0)
         bpy.ops.object.editmode_toggle()
         # Restore active selection
         curve_obj = context.active_object
