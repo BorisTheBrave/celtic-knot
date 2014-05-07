@@ -169,7 +169,7 @@ class CelticKnotOperator(bpy.types.Operator):
                 normal = loop.calc_normal() + prev_loop.calc_normal()
                 normal.normalize()
                 offset = weave_up if forward else weave_down
-                midpoint += offset * normal
+                midpoint = midpoint + offset * normal
                 cos.extend(midpoint)
                 if handle_type != "AUTO":
                     tangent = loop.link_loop_next.vert.co - loop.vert.co
