@@ -58,24 +58,74 @@ def get_celtic_twists(bm):
     return twists
 
 
-def create_bezier(context, bm, twists,
-                  crossing_angle, crossing_strength, handle_type, weave_up, weave_down):
-    # Cache some values
-    s = sin(crossing_angle) * crossing_strength
-    c = cos(crossing_angle) * crossing_strength
-    orig_obj = obj = context.active_object
-    # Create the new object
-    curve = bpy.data.curves.new("Celtic", "CURVE")
-    curve.dimensions = "3D"
-    curve.twist_mode = "MINIMUM"
-    obj = obj.data
-    # Compute all the midpoints of each edge
-    midpoints = []
-    for e in obj.edges.values():
-        v1 = obj.vertices[e.vertices[0]]
-        v2 = obj.vertices[e.vertices[1]]
-        m = (v1.co + v2.co) / 2.0
-        midpoints.append(m)
+class BezierBuilder:
+    def __init__(self, bm, crossing_angle, crossing_strength, handle_type, weave_up, weave_down):
+        # Cache some values
+        self.s = sin(crossing_angle) * crossing_strength
+        self.c = cos(crossing_angle) * crossing_strength
+        self.handle_type = handle_type
+        self.weave_up = weave_up
+        self.weave_down = weave_down
+        # Create the new object
+        self.curve = bpy.data.curves.new("Celtic", "CURVE")
+        self.curve.dimensions = "3D"
+        self.curve.twist_mode = "MINIMUM"
+        # Compute all the midpoints of each edge
+        self.midpoints = []
+        for e in bm.edges:
+            v1 = e.verts[0]
+            v2 = e.verts[1]
+            m = (v1.co + v2.co) / 2.0
+            self.midpoints.append(m)
+        # Per strand stuff
+        self.current_spline = None
+        self.cos = None
+        self.handle_lefts = None
+        self.handle_rights = None
+        self.first = True
+
+    def start_strand(self):
+        self.current_spline = self.curve.splines.new("BEZIER")
+        self.current_spline.use_cyclic_u = True
+        # Data for the strand
+        # It's faster to store in an array and load into blender
+        # at once
+        self.cos = []
+        self.handle_lefts = []
+        self.handle_rights = []
+        self.first = True
+
+    def add_loop(self, prev_loop, loop, forward):
+        if not self.first:
+            self.current_spline.bezier_points.add()
+        self.first = False
+        midpoint = self.midpoints[loop.edge.index]
+        normal = loop.calc_normal() + prev_loop.calc_normal()
+        normal.normalize()
+        offset = self.weave_up if forward else self.weave_down
+        midpoint = midpoint + offset * normal
+        self.cos.extend(midpoint)
+        if self.handle_type != "AUTO":
+            tangent = loop.link_loop_next.vert.co - loop.vert.co
+            tangent.normalize()
+            binormal = normal.cross(tangent).normalized()
+            if not forward: tangent *= -1
+            s_binormal = self.s * binormal
+            c_tangent = self.c * tangent
+            handle_left = midpoint - s_binormal - c_tangent
+            handle_right = midpoint + s_binormal + c_tangent
+            self.handle_lefts.extend(handle_left)
+            self.handle_rights.extend(handle_right)
+
+    def end_strand(self):
+        points = self.current_spline.bezier_points
+        points.foreach_set("co", self.cos)
+        if self.handle_type != "AUTO":
+            points.foreach_set("handle_left", self.handle_lefts)
+            points.foreach_set("handle_right", self.handle_rights)
+
+
+def visit_strands(bm, twists, builder):
     # Stores which loops the curve has already passed through
     loops_entered = defaultdict(lambda: False)
     loops_exited = defaultdict(lambda: False)
@@ -90,15 +140,7 @@ def create_bezier(context, bm, twists,
     # sharing a face, it is passing through in clockwise order
     # else anticlockwise
     def make_loop(loop, forward):
-        current_spline = curve.splines.new("BEZIER")
-        current_spline.use_cyclic_u = True
-        first = True
-        # Data for the spline
-        # It's faster to store in an array and load into blender
-        # at once
-        cos = []
-        handle_lefts = []
-        handle_rights = []
+        builder.start_strand()
         while True:
             if forward:
                 if loops_exited[loop]: break
@@ -130,31 +172,8 @@ def create_bezier(context, bm, twists,
                 assert loop.link_loops[-1] != loop
                 loop = loop.link_loops[-1]
                 forward = loop.vert.index == v
-            if not first:
-                current_spline.bezier_points.add()
-            first = False
-            midpoint = midpoints[loop.edge.index]
-            normal = loop.calc_normal() + prev_loop.calc_normal()
-            normal.normalize()
-            offset = weave_up if forward else weave_down
-            midpoint = midpoint + offset * normal
-            cos.extend(midpoint)
-            if handle_type != "AUTO":
-                tangent = loop.link_loop_next.vert.co - loop.vert.co
-                tangent.normalize()
-                binormal = normal.cross(tangent).normalized()
-                if not forward: tangent *= -1
-                s_binormal = s * binormal
-                c_tangent = c * tangent
-                handle_left = midpoint - s_binormal - c_tangent
-                handle_right = midpoint + s_binormal + c_tangent
-                handle_lefts.extend(handle_left)
-                handle_rights.extend(handle_right)
-        points = current_spline.bezier_points
-        points.foreach_set("co", cos)
-        if handle_type != "AUTO":
-            points.foreach_set("handle_left", handle_lefts)
-            points.foreach_set("handle_right", handle_rights)
+            builder.add_loop(prev_loop, loop, forward)
+        builder.end_strand()
 
     # Attempt to start a loop at each untouched loop in the entire mesh
     for face in bm.faces:
@@ -163,6 +182,14 @@ def create_bezier(context, bm, twists,
             if not loops_exited[loop]: make_loop(loop, True)
             if not loops_entered[loop]: make_loop(loop, False)
 
+
+def create_bezier(context, bm, twists,
+                  crossing_angle, crossing_strength, handle_type, weave_up, weave_down):
+    builder = BezierBuilder(bm, crossing_angle, crossing_strength, handle_type, weave_up, weave_down)
+    visit_strands(bm, twists, builder)
+    curve = builder.curve
+
+    orig_obj = context.active_object
     # Create an object from the curve
     from bpy_extras import object_utils
     object_utils.object_data_add(context, curve, operator=None)
