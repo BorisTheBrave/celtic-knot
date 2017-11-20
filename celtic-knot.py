@@ -36,16 +36,23 @@ bl_info = {
 
 import bpy
 import bmesh
+from bpy_extras import object_utils
 from collections import defaultdict
 from mathutils import Vector
 from math import pi, sin, cos
 
 HANDLE_TYPE_MAP = {"AUTO": "AUTOMATIC", "ALIGNED": "ALIGNED"}
 
+# Twist types
 TWIST_CW = "TWIST_CW"
 STRAIGHT = "STRAIGHT"
 TWIST_CCW = "TWIST_CCW"
 IGNORE = "IGNORE"
+
+# output types
+BEZIER = "BEZIER"
+PIPE = "PIPE"
+RIBBON = "RIBBON"
 
 
 def get_celtic_twists(bm):
@@ -56,6 +63,59 @@ def get_celtic_twists(bm):
         else:
             twists.append(TWIST_CW)
     return twists
+
+
+class RibbonBuilder:
+    def __init__(self, weave_up, weave_down):
+        self.weave_up = weave_up
+        self.weave_down = weave_down
+        self.vertices = []
+        self.faces = []
+        self.prev_out_verts = None
+        self.first_in_verts = None
+
+    def start_strand(self):
+        self.first_in_verts = None
+        self.prev_out_verts = None
+
+    def add_loop(self, prev_loop, loop, forward):
+        normal = loop.calc_normal() + prev_loop.calc_normal()
+        normal.normalize()
+        offset = (self.weave_up if forward else self.weave_down) * normal
+
+        center1 = prev_loop.face.calc_center_median()
+        center2 = loop.face.calc_center_median()
+        v1 = loop.vert.co
+        v2 = loop.link_loop_next.vert.co
+        i = len(self.vertices)
+        self.vertices.append(v1 + offset)
+        self.vertices.append(center1 + offset)
+        self.vertices.append(v2 + offset)
+        self.vertices.append(center2 + offset)
+        #self.faces.append([i, i+1, i+2, i+3])
+        self.faces.append([i, i + 1, i + 2])
+        self.faces.append([i, i + 2, i + 3])
+        if forward:
+            in_verts = [i + 1, i + 0]
+            out_verts = [i + 3, i + 2]
+        else:
+            in_verts = [i + 2, i + 1]
+            out_verts = [i + 0, i + 3]
+
+        if self.first_in_verts is None:
+            self.first_in_verts = in_verts
+        if self.prev_out_verts is not None:
+            self.faces.append(self.prev_out_verts + in_verts)
+        self.prev_out_verts = out_verts
+
+    def end_strand(self):
+        self.faces.append(self.prev_out_verts + self.first_in_verts)
+
+    def make_mesh(self):
+        me = bpy.data.meshes.new("")
+        me.from_pydata(self.vertices, [], self.faces)
+        me.update(calc_edges=True)
+        return me
 
 
 class BezierBuilder:
@@ -191,7 +251,6 @@ def create_bezier(context, bm, twists,
 
     orig_obj = context.active_object
     # Create an object from the curve
-    from bpy_extras import object_utils
     object_utils.object_data_add(context, curve, operator=None)
     # Set the handle type (this is faster than setting it pointwise)
     bpy.ops.object.editmode_toggle()
@@ -204,6 +263,16 @@ def create_bezier(context, bm, twists,
     curve_obj = context.active_object
     context.scene.objects.active = orig_obj
     return curve_obj
+
+def create_ribbon(context, bm, twists, weave_up, weave_down):
+    builder = RibbonBuilder(weave_up, weave_down)
+    visit_strands(bm, twists, builder)
+    mesh = builder.make_mesh()
+    orig_obj = context.active_object
+    object_utils.object_data_add(context, mesh, operator=None)
+    mesh_obj = context.active_object
+    context.scene.objects.active = orig_obj
+    return mesh_obj
 
 
 def create_pipe_from_bezier(context, curve_obj, thickness):
@@ -237,6 +306,14 @@ class CelticKnotOperator(bpy.types.Operator):
                                          description="Distance to shift curve downward under knots",
                                          subtype="DISTANCE",
                                          unit="LENGTH")
+    output_types = [(BEZIER, "Bezier", "Bezier curve"),
+                    (PIPE, "Pipe", "Rounded solid mesh"),
+                    (RIBBON, "Ribbon", "Flat plane mesh")]
+    output_type = bpy.props.EnumProperty(items=output_types,
+                                         name="Output Type",
+                                         description="Controls what type of curve/mesh is generated",
+                                         default=BEZIER)
+
     handle_types = [("ALIGNED","Aligned","Points at a fixed crossing angle"),
                     ("AUTO","Auto","Automatic control points")]
     handle_type = bpy.props.EnumProperty(items=handle_types,
@@ -260,6 +337,18 @@ class CelticKnotOperator(bpy.types.Operator):
                                         subtype="DISTANCE",
                                         unit="LENGTH")
 
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "weave_up")
+        layout.prop(self, "weave_down")
+        layout.prop(self, "output_type")
+        if self.output_type in (BEZIER, PIPE):
+            layout.prop(self, "handle_type")
+            layout.prop(self, "crossing_angle")
+            layout.prop(self, "crossing_strength")
+        if self.output_type == PIPE:
+            layout.prop(self, "thickness")
+
     @classmethod
     def poll(cls, context):
         ob = context.active_object
@@ -274,16 +363,19 @@ class CelticKnotOperator(bpy.types.Operator):
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         twists = get_celtic_twists(bm)
-        curve_obj = create_bezier(context, bm, twists,
-                      self.crossing_angle,
-                      self.crossing_strength,
-                      self.handle_type,
-                      self.weave_up,
-                      self.weave_down)
+        if self.output_type in (BEZIER, PIPE):
+            curve_obj = create_bezier(context, bm, twists,
+                          self.crossing_angle,
+                          self.crossing_strength,
+                          self.handle_type,
+                          self.weave_up,
+                          self.weave_down)
 
-        # If thick, then give it a bevel_object and convert to mesh
-        if self.thickness > 0:
-            create_pipe_from_bezier(context, curve_obj, self.thickness)
+            # If thick, then give it a bevel_object and convert to mesh
+            if self.output_type == PIPE and self.thickness > 0:
+                create_pipe_from_bezier(context, curve_obj, self.thickness)
+        else:
+            create_ribbon(context, bm, twists, self.weave_up, self.weave_down)
         return {'FINISHED'}
 
 def menu_func(self, context):
