@@ -27,7 +27,7 @@ bl_info = {
     "name": "Celtic Knot",
     "description": "",
     "author": "Adam Newgas",
-    "version": (0,1,1),
+    "version": (0,1,2),
     "blender": (2, 68, 0),
     "location": "View3D > Add > Curve",
     "warning": "",
@@ -38,7 +38,164 @@ import bpy
 import bmesh
 from collections import defaultdict
 from mathutils import Vector
-from math import pi,sin,cos
+from math import pi, sin, cos
+
+HANDLE_TYPE_MAP = {"AUTO": "AUTOMATIC", "ALIGNED": "ALIGNED"}
+
+TWIST_CW = "TWIST_CW"
+STRAIGHT = "STRAIGHT"
+TWIST_CCW = "TWIST_CCW"
+IGNORE = "IGNORE"
+
+
+def get_celtic_twists(bm):
+    twists = []
+    for edge in bm.edges:
+        if len(edge.link_loops) == 0:
+            twists.append(IGNORE)
+        else:
+            twists.append(TWIST_CW)
+    return twists
+
+
+def create_bezier(context, bm, twists,
+                  crossing_angle, crossing_strength, handle_type, weave_up, weave_down):
+    # Cache some values
+    s = sin(crossing_angle) * crossing_strength
+    c = cos(crossing_angle) * crossing_strength
+    orig_obj = obj = context.active_object
+    # Create the new object
+    curve = bpy.data.curves.new("Celtic", "CURVE")
+    curve.dimensions = "3D"
+    curve.twist_mode = "MINIMUM"
+    obj = obj.data
+    # Compute all the midpoints of each edge
+    midpoints = []
+    for e in obj.edges.values():
+        v1 = obj.vertices[e.vertices[0]]
+        v2 = obj.vertices[e.vertices[1]]
+        m = (v1.co + v2.co) / 2.0
+        midpoints.append(m)
+    # Stores which loops the curve has already passed through
+    loops_entered = defaultdict(lambda: False)
+    loops_exited = defaultdict(lambda: False)
+
+    # Loops on the boundary of a surface
+    def ignorable_loop(loop):
+        return len(loop.link_loops) == 0
+
+    # Starting at loop, build a curve one vertex at a time
+    # until we start where we came from
+    # Forward means that for any two edges the loop crosses
+    # sharing a face, it is passing through in clockwise order
+    # else anticlockwise
+    def make_loop(loop, forward):
+        current_spline = curve.splines.new("BEZIER")
+        current_spline.use_cyclic_u = True
+        first = True
+        # Data for the spline
+        # It's faster to store in an array and load into blender
+        # at once
+        cos = []
+        handle_lefts = []
+        handle_rights = []
+        while True:
+            if forward:
+                if loops_exited[loop]: break
+                loops_exited[loop] = True
+                # Follow the face around, ignoring boundary edges
+                while True:
+                    loop = loop.link_loop_next
+                    if not ignorable_loop(loop): break
+                assert loops_entered[loop] == False
+                loops_entered[loop] = True
+                v = loop.vert.index
+                prev_loop = loop
+                # Find next radial loop
+                assert loop.link_loops[0] != loop
+                loop = loop.link_loops[0]
+                forward = loop.vert.index == v
+            else:
+                if loops_entered[loop]: break
+                loops_entered[loop] = True
+                # Follow the face around, ignoring boundary edges
+                while True:
+                    v = loop.vert.index
+                    loop = loop.link_loop_prev
+                    if not ignorable_loop(loop): break
+                assert loops_exited[loop] == False
+                loops_exited[loop] = True
+                prev_loop = loop
+                # Find next radial loop
+                assert loop.link_loops[-1] != loop
+                loop = loop.link_loops[-1]
+                forward = loop.vert.index == v
+            if not first:
+                current_spline.bezier_points.add()
+            first = False
+            midpoint = midpoints[loop.edge.index]
+            normal = loop.calc_normal() + prev_loop.calc_normal()
+            normal.normalize()
+            offset = weave_up if forward else weave_down
+            midpoint = midpoint + offset * normal
+            cos.extend(midpoint)
+            if handle_type != "AUTO":
+                tangent = loop.link_loop_next.vert.co - loop.vert.co
+                tangent.normalize()
+                binormal = normal.cross(tangent).normalized()
+                if not forward: tangent *= -1
+                s_binormal = s * binormal
+                c_tangent = c * tangent
+                handle_left = midpoint - s_binormal - c_tangent
+                handle_right = midpoint + s_binormal + c_tangent
+                handle_lefts.extend(handle_left)
+                handle_rights.extend(handle_right)
+        points = current_spline.bezier_points
+        points.foreach_set("co", cos)
+        if handle_type != "AUTO":
+            points.foreach_set("handle_left", handle_lefts)
+            points.foreach_set("handle_right", handle_rights)
+
+    # Attempt to start a loop at each untouched loop in the entire mesh
+    for face in bm.faces:
+        for loop in face.loops:
+            if ignorable_loop(loop): continue
+            if not loops_exited[loop]: make_loop(loop, True)
+            if not loops_entered[loop]: make_loop(loop, False)
+
+    # Create an object from the curve
+    from bpy_extras import object_utils
+    object_utils.object_data_add(context, curve, operator=None)
+    # Set the handle type (this is faster than setting it pointwise)
+    bpy.ops.object.editmode_toggle()
+    bpy.ops.curve.select_all(action="SELECT")
+    bpy.ops.curve.handle_type_set(type=HANDLE_TYPE_MAP[handle_type])
+    # Some blender versions lack the default
+    bpy.ops.curve.radius_set(radius=1.0)
+    bpy.ops.object.editmode_toggle()
+    # Restore active selection
+    curve_obj = context.active_object
+    context.scene.objects.active = orig_obj
+    return curve_obj
+
+
+def create_pipe_from_bezier(context, curve_obj, thickness):
+    bpy.ops.curve.primitive_bezier_circle_add()
+    bpy.ops.transform.resize(value=(thickness,) * 3)
+    circle = context.active_object
+    curve_obj.data.bevel_object = circle
+    curve_obj.select = True
+    context.scene.objects.active = curve_obj
+    # For some reason only works with keep_original=True
+    bpy.ops.object.convert(target="MESH", keep_original=True)
+    new_obj = context.scene.objects.active
+    new_obj.select = False
+    curve_obj.select = True
+    circle.select = True
+    bpy.ops.object.delete()
+    new_obj.select = True
+    context.scene.objects.active = new_obj
+
 
 class CelticKnotOperator(bpy.types.Operator):
     bl_idname = "object.celtic_knot_operator"
@@ -76,8 +233,6 @@ class CelticKnotOperator(bpy.types.Operator):
                                         subtype="DISTANCE",
                                         unit="LENGTH")
 
-    handle_type_map = {"AUTO":"AUTOMATIC","ALIGNED":"ALIGNED"}
-
     @classmethod
     def poll(cls, context):
         ob = context.active_object
@@ -88,142 +243,20 @@ class CelticKnotOperator(bpy.types.Operator):
                 (context.mode == "OBJECT"))
 
     def execute(self, context):
-        # Cache some values
-        s = sin(self.crossing_angle) * self.crossing_strength
-        c = cos(self.crossing_angle) * self.crossing_strength
-        handle_type = self.handle_type
-        weave_up = self.weave_up
-        weave_down = self.weave_down
-        # Create the new object
-        orig_obj = obj = context.active_object
-        curve = bpy.data.curves.new("Celtic","CURVE")
-        curve.dimensions = "3D"
-        curve.twist_mode = "MINIMUM"
-        obj = obj.data
-        midpoints = []
-        # Compute all the midpoints of each edge
-        for e in obj.edges.values():
-            v1 = obj.vertices[e.vertices[0]]
-            v2 = obj.vertices[e.vertices[1]]
-            m = (v1.co+v2.co) / 2.0
-            midpoints.append(m)
-
+        obj = context.active_object
         bm = bmesh.new()
-        bm.from_mesh(obj)
-        # Stores which loops the curve has already passed through
-        loops_entered = defaultdict(lambda:False)
-        loops_exited = defaultdict(lambda:False)
-        # Loops on the boundary of a surface
-        def ignorable_loop(loop):
-            return len(loop.link_loops)==0
-        # Starting at loop, build a curve one vertex at a time
-        # until we start where we came from
-        # Forward means that for any two edges the loop crosses
-        # sharing a face, it is passing through in clockwise order
-        # else anticlockwise
-        def make_loop(loop, forward):
-            current_spline = curve.splines.new("BEZIER")
-            current_spline.use_cyclic_u = True
-            first = True
-            # Data for the spline
-            # It's faster to store in an array and load into blender
-            # at once
-            cos = []
-            handle_lefts = []
-            handle_rights = []
-            while True:
-                if forward:
-                    if loops_exited[loop]: break
-                    loops_exited[loop] = True
-                    # Follow the face around, ignoring boundary edges
-                    while True:
-                        loop = loop.link_loop_next
-                        if not ignorable_loop(loop): break
-                    assert loops_entered[loop] == False
-                    loops_entered[loop] = True
-                    v = loop.vert.index
-                    prev_loop = loop
-                    # Find next radial loop
-                    assert loop.link_loops[0] != loop
-                    loop = loop.link_loops[0]
-                    forward = loop.vert.index == v
-                else:
-                    if loops_entered[loop]: break
-                    loops_entered[loop] = True
-                    # Follow the face around, ignoring boundary edges
-                    while True:
-                        v = loop.vert.index
-                        loop = loop.link_loop_prev
-                        if not ignorable_loop(loop): break
-                    assert loops_exited[loop] == False
-                    loops_exited[loop] = True
-                    prev_loop = loop
-                    # Find next radial loop
-                    assert loop.link_loops[-1] != loop
-                    loop = loop.link_loops[-1]
-                    forward = loop.vert.index == v
-                if not first:
-                    current_spline.bezier_points.add()
-                first = False
-                midpoint = midpoints[loop.edge.index]
-                normal = loop.calc_normal() + prev_loop.calc_normal()
-                normal.normalize()
-                offset = weave_up if forward else weave_down
-                midpoint = midpoint + offset * normal
-                cos.extend(midpoint)
-                if handle_type != "AUTO":
-                    tangent = loop.link_loop_next.vert.co - loop.vert.co
-                    tangent.normalize()
-                    binormal = normal.cross(tangent).normalized()
-                    if not forward: tangent *= -1
-                    s_binormal = s * binormal
-                    c_tangent = c * tangent
-                    handle_left = midpoint - s_binormal - c_tangent
-                    handle_right = midpoint + s_binormal + c_tangent
-                    handle_lefts.extend(handle_left)
-                    handle_rights.extend(handle_right)
-            points = current_spline.bezier_points
-            points.foreach_set("co",cos)
-            if handle_type != "AUTO":
-                points.foreach_set("handle_left",handle_lefts)
-                points.foreach_set("handle_right",handle_rights)
+        bm.from_mesh(obj.data)
+        twists = get_celtic_twists(bm)
+        curve_obj = create_bezier(context, bm, twists,
+                      self.crossing_angle,
+                      self.crossing_strength,
+                      self.handle_type,
+                      self.weave_up,
+                      self.weave_down)
 
-        # Attempt to start a loop at each untouched loop in the entire mesh
-        for face in bm.faces:
-            for loop in face.loops:
-                if ignorable_loop(loop): continue
-                if not loops_exited[loop]: make_loop(loop, True)
-                if not loops_entered[loop]: make_loop(loop, False)
-        # Create an object from the curve
-        from bpy_extras import object_utils
-        object_utils.object_data_add(context, curve, operator=None)
-        # Set the handle type (this is faster than setting it pointwise)
-        bpy.ops.object.editmode_toggle()
-        bpy.ops.curve.select_all(action="SELECT")
-        bpy.ops.curve.handle_type_set(type=self.handle_type_map[handle_type])
-        # Some blender versions lack the default
-        bpy.ops.curve.radius_set(radius=1.0)
-        bpy.ops.object.editmode_toggle()
-        # Restore active selection
-        curve_obj = context.active_object
-        context.scene.objects.active = orig_obj
         # If thick, then give it a bevel_object and convert to mesh
         if self.thickness > 0:
-            bpy.ops.curve.primitive_bezier_circle_add()
-            bpy.ops.transform.resize(value=(self.thickness,)*3)
-            circle = context.active_object
-            curve.bevel_object = circle
-            curve_obj.select = True
-            context.scene.objects.active = curve_obj
-            # For some reason only works with keep_original=True
-            bpy.ops.object.convert(target="MESH", keep_original=True)
-            new_obj = context.scene.objects.active
-            new_obj.select = False
-            curve_obj.select = True
-            circle.select = True
-            bpy.ops.object.delete()
-            new_obj.select = True
-            context.scene.objects.active = new_obj
+            create_pipe_from_bezier(context, curve_obj, self.thickness)
         return {'FINISHED'}
 
 def menu_func(self, context):
