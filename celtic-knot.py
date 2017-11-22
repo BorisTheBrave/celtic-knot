@@ -40,6 +40,7 @@ from bpy_extras import object_utils
 from collections import defaultdict
 from mathutils import Vector
 from math import pi, sin, cos
+from random import random, seed
 
 HANDLE_TYPE_MAP = {"AUTO": "AUTOMATIC", "ALIGNED": "ALIGNED"}
 
@@ -56,51 +57,88 @@ RIBBON = "RIBBON"
 
 
 def get_celtic_twists(bm):
+    seed(0)
     twists = []
     for edge in bm.edges:
         if len(edge.link_loops) == 0:
             twists.append(IGNORE)
         else:
-            twists.append(TWIST_CW)
+            if random() < 0.5:
+                twists.append(TWIST_CW)
+            else:
+                twists.append(STRAIGHT)
     return twists
 
 
+def get_offset(weave_up, weave_down, twist, forward):
+    if twist is TWIST_CW:
+        return weave_up if forward else weave_down
+    elif twist is TWIST_CCW:
+        return weave_down if forward else weave_up
+    elif twist is STRAIGHT:
+        return (weave_down + weave_up) / 2.0
+
+
+def lerp(v1, v2, t):
+    return v1 * (1 - t) + v2 * t
+
+
 class RibbonBuilder:
-    def __init__(self, weave_up, weave_down):
+    def __init__(self, weave_up, weave_down, length, breadth):
         self.weave_up = weave_up
         self.weave_down = weave_down
         self.vertices = []
         self.faces = []
         self.prev_out_verts = None
         self.first_in_verts = None
+        self.c = length
+        self.w = breadth
+
+    def get_sub_face(self, v1, v2, v3, v4):
+        hc = self.c / 2.0
+        hw = self.w / 2.0
+        return (
+            lerp(lerp(v1, v4, 0.5 - hc), lerp(v2, v3, 0.5 - hc), 0.5 - hw),
+            lerp(lerp(v1, v4, 0.5 - hc), lerp(v2, v3, 0.5 - hc), 0.5 + hw),
+            lerp(lerp(v1, v4, 0.5 + hc), lerp(v2, v3, 0.5 + hc), 0.5 + hw),
+            lerp(lerp(v1, v4, 0.5 + hc), lerp(v2, v3, 0.5 + hc), 0.5 - hw),
+        )
 
     def start_strand(self):
         self.first_in_verts = None
         self.prev_out_verts = None
 
-    def add_loop(self, prev_loop, loop, forward):
+    def add_loop(self, prev_loop, loop, twist, forward):
         normal = loop.calc_normal() + prev_loop.calc_normal()
         normal.normalize()
-        offset = (self.weave_up if forward else self.weave_down) * normal
+        offset = get_offset(self.weave_up, self.weave_down, twist, forward) * normal
 
         center1 = prev_loop.face.calc_center_median()
         center2 = loop.face.calc_center_median()
         v1 = loop.vert.co
         v2 = loop.link_loop_next.vert.co
+
+        if twist is STRAIGHT:
+            if forward:
+                v1, center1, v2, center2 = center1, v1, v2, center1
+            else:
+                v1, center1, v2, center2 = v2, center1, center1, v1
+        else:
+            if not forward:
+                v1, center1, v2, center2 = center1, v2, center2, v1
+
+        v1, center1, v2, center2 = self.get_sub_face(v1, center1, v2, center2)
+
         i = len(self.vertices)
         self.vertices.append(v1 + offset)
         self.vertices.append(center1 + offset)
         self.vertices.append(v2 + offset)
         self.vertices.append(center2 + offset)
-        #self.faces.append([i, i+1, i+2, i+3])
+        # self.faces.append([i, i+1, i+2, i+3])
         self.faces.append([i, i + 1, i + 2])
         self.faces.append([i, i + 2, i + 3])
-        if forward:
-            in_verts = [i + 1, i + 0]
-            out_verts = [i + 3, i + 2]
-        else:
-            in_verts = [i + 2, i + 1]
-            out_verts = [i + 0, i + 3]
+        in_verts = [i + 1, i + 0]
+        out_verts = [i + 3, i + 2]
 
         if self.first_in_verts is None:
             self.first_in_verts = in_verts
@@ -155,15 +193,15 @@ class BezierBuilder:
         self.handle_rights = []
         self.first = True
 
-    def add_loop(self, prev_loop, loop, forward):
+    def add_loop(self, prev_loop, loop, twist, forward):
         if not self.first:
             self.current_spline.bezier_points.add()
         self.first = False
         midpoint = self.midpoints[loop.edge.index]
         normal = loop.calc_normal() + prev_loop.calc_normal()
         normal.normalize()
-        offset = self.weave_up if forward else self.weave_down
-        midpoint = midpoint + offset * normal
+        offset = get_offset(self.weave_up, self.weave_down, twist, forward) * normal
+        midpoint = midpoint + offset
         self.cos.extend(midpoint)
         if self.handle_type != "AUTO":
             tangent = loop.link_loop_next.vert.co - loop.vert.co
@@ -214,8 +252,10 @@ def visit_strands(bm, twists, builder):
                 v = loop.vert.index
                 prev_loop = loop
                 # Find next radial loop
-                assert loop.link_loops[0] != loop
-                loop = loop.link_loops[0]
+                twist = twists[loop.edge.index]
+                if twist in (TWIST_CCW, TWIST_CW):
+                    assert loop.link_loops[0] != loop
+                    loop = loop.link_loops[0]
                 forward = loop.vert.index == v
             else:
                 if loops_entered[loop]: break
@@ -229,10 +269,12 @@ def visit_strands(bm, twists, builder):
                 loops_exited[loop] = True
                 prev_loop = loop
                 # Find next radial loop
-                assert loop.link_loops[-1] != loop
-                loop = loop.link_loops[-1]
+                twist = twists[loop.edge.index]
+                if twist in (TWIST_CCW, TWIST_CW):
+                    assert loop.link_loops[-1] != loop
+                    loop = loop.link_loops[-1]
                 forward = loop.vert.index == v
-            builder.add_loop(prev_loop, loop, forward)
+            builder.add_loop(prev_loop, loop, twist, forward)
         builder.end_strand()
 
     # Attempt to start a loop at each untouched loop in the entire mesh
@@ -264,8 +306,9 @@ def create_bezier(context, bm, twists,
     context.scene.objects.active = orig_obj
     return curve_obj
 
-def create_ribbon(context, bm, twists, weave_up, weave_down):
-    builder = RibbonBuilder(weave_up, weave_down)
+
+def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth):
+    builder = RibbonBuilder(weave_up, weave_down, length, breadth)
     visit_strands(bm, twists, builder)
     mesh = builder.make_mesh()
     orig_obj = context.active_object
@@ -336,6 +379,20 @@ class CelticKnotOperator(bpy.types.Operator):
                                         soft_min=0,
                                         subtype="DISTANCE",
                                         unit="LENGTH")
+    length = bpy.props.FloatProperty(name="Length",
+                                     description="Percent along faces that the ribbon runs parallel",
+                                     subtype="PERCENTAGE",
+                                     unit="NONE",
+                                     default=0.9,
+                                     soft_min=0.0,
+                                     soft_max=1.0)
+    breadth = bpy.props.FloatProperty(name="Breadth",
+                                      description="Ribbon width as a percentage across faces.",
+                                      subtype="PERCENTAGE",
+                                      unit="NONE",
+                                      default=0.5,
+                                      soft_min=0.0,
+                                      soft_max=1.0)
 
     def draw(self, context):
         layout = self.layout
@@ -344,8 +401,12 @@ class CelticKnotOperator(bpy.types.Operator):
         layout.prop(self, "output_type")
         if self.output_type in (BEZIER, PIPE):
             layout.prop(self, "handle_type")
-            layout.prop(self, "crossing_angle")
-            layout.prop(self, "crossing_strength")
+            if self.handle_type != "AUTO":
+                layout.prop(self, "crossing_angle")
+                layout.prop(self, "crossing_strength")
+        elif self.output_type == RIBBON:
+            layout.prop(self, "length")
+            layout.prop(self, "breadth")
         if self.output_type == PIPE:
             layout.prop(self, "thickness")
 
@@ -375,7 +436,7 @@ class CelticKnotOperator(bpy.types.Operator):
             if self.output_type == PIPE and self.thickness > 0:
                 create_pipe_from_bezier(context, curve_obj, self.thickness)
         else:
-            create_ribbon(context, bm, twists, self.weave_up, self.weave_down)
+            create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length, self.breadth)
         return {'FINISHED'}
 
 def menu_func(self, context):
