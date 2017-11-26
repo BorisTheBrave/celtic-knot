@@ -40,7 +40,7 @@ from bpy_extras import object_utils
 from collections import defaultdict
 from mathutils import Vector
 from math import pi, sin, cos
-from random import random, seed
+from random import random, seed, choice, randrange
 
 HANDLE_TYPE_MAP = {"AUTO": "AUTOMATIC", "ALIGNED": "ALIGNED"}
 
@@ -68,6 +68,147 @@ def get_celtic_twists(bm):
             else:
                 twists.append(STRAIGHT)
     return twists
+
+
+def get_twill_twists(bm):
+    # Largely based off "Cyclic Twill-Woven Objects", Akleman, Chen, Chen, Xing, Gross (2011)
+    seed(0)
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+
+    def move(loop, forward):
+        """Advances the loop one along the braid in the direction indicated,
+        also returning the new loop-local direction consistent with the passed in one."""
+        if forward:
+            # Follow the face around, ignoring boundary edges
+            loop = loop.link_loop_next
+            v = loop.vert.index
+            # Find next radial loop
+            assert loop.link_loops[0] != loop
+            loop = loop.link_loops[0]
+            forward = loop.vert.index == v
+            return loop, forward
+        else:
+            # Follow the face around, ignoring boundary edges
+            v = loop.vert.index
+            loop = loop.link_loop_prev
+            # Find next radial loop
+            assert loop.link_loops[-1] != loop
+            loop = loop.link_loops[-1]
+            forward = loop.vert.index == v
+            return loop, forward
+
+    def swap(loop, forward):
+        """Switch from a loop to its partner on the same edge,
+        also returning the new loop-local direction consistent with the passed in one."""
+        v = loop.vert.index
+        assert len(loop.link_loops) == 1, "Found link loop of size {}, only manifold meshes supported currently".format(len(loop.link_loops))
+        loop = loop.link_loops[0]
+        forward = (loop.vert.index == v) == forward
+        return loop, forward
+
+    class Votes:
+        def __init__(self, cw=0, ccw=0):
+            self.cw = cw
+            self.ccw = ccw
+
+        def __add__(self, other):
+            return Votes(self.cw + other.cw, self.ccw + other.ccw)
+
+    def edge_cond_vote(loop, forward):
+        next, next_forward = move(loop, forward)
+        next2, _ = move(next, next_forward)
+        twist1 = coloring[next.edge.index]
+        twist2 = coloring[next2.edge.index]
+        if twist1 is None or twist2 is None:
+            return Votes()
+        if twist1 is TWIST_CW and twist2 is TWIST_CW:
+            return Votes(0, 1)
+        if twist1 is TWIST_CCW and twist2 is TWIST_CCW:
+            return Votes(1, 0)
+        return Votes(1, 1)
+
+    def face_cond_vote(loop, forward):
+        s, s_forward = move(loop, forward)
+        p, _ = move(*swap(loop, not forward))
+        f, _ = move(*swap(s, s_forward))
+        twist_s = coloring[s.edge.index]
+        twist_p = coloring[p.edge.index]
+        twist_f = coloring[f.edge.index]
+        if twist_s is None or twist_p is None or twist_f is None:
+            return Votes()
+        if twist_p != twist_f:
+            if twist_s is TWIST_CW:
+                return Votes(1, 0)
+            else:
+                return Votes(0, 1)
+        return Votes(1, 1)
+
+    def vert_cond_vote(loop, forward):
+        s, s_forward = move(loop, forward)
+        p, _ = move(*swap(loop, forward))
+        f, _ = move(*swap(s, not s_forward))
+        twist_s = coloring[s.edge.index]
+        twist_p = coloring[p.edge.index]
+        twist_f = coloring[f.edge.index]
+        if twist_s is None or twist_p is None or twist_f is None:
+            return Votes()
+        if twist_p != twist_f:
+            if twist_s is TWIST_CW:
+                return Votes(1, 0)
+            else:
+                return Votes(0, 1)
+        return Votes(1, 1)
+
+    def count_votes(edge):
+        votes = Votes()
+        assert len(edge.link_loops) == 2
+        loop1 = edge.link_loops[0]
+        loop2 = edge.link_loops[1]
+        # Edge condition votes
+        votes += edge_cond_vote(loop1, True)
+        votes += edge_cond_vote(loop1, False)
+        votes += edge_cond_vote(loop2, True)
+        votes += edge_cond_vote(loop2, False)
+        # Face condition votes
+        votes += face_cond_vote(loop1, True)
+        votes += face_cond_vote(loop1, False)
+        votes += face_cond_vote(loop2, True)
+        votes += face_cond_vote(loop2, False)
+        # Vert condition votes
+        votes += vert_cond_vote(loop1, True)
+        votes += vert_cond_vote(loop1, False)
+        votes += vert_cond_vote(loop2, True)
+        votes += vert_cond_vote(loop2, False)
+
+        return votes
+
+    # Initialize
+    frontier = set()
+    coloring = [None] * len(bm.edges)
+
+    def color_edge(edge, twist):
+        if edge.index in frontier:
+            frontier.remove(edge.index)
+        coloring[edge.index] = twist
+        for v in edge.verts:
+            for other in v.link_edges:
+                if coloring[other.index] is None:
+                    frontier.add(other.index)
+
+    v0 = randrange(len(bm.verts))
+    for e in bm.verts[v0].link_edges:
+        color_edge(e, TWIST_CW)
+
+    # Color the best choice of edge
+    while frontier:
+        votes = {e: count_votes(bm.edges[e]) for e in frontier}
+        m = max(max(v.cw, v.ccw) for v in votes.values())
+        best_edge, best_votes = choice([(k, v) for (k, v) in votes.items() if v.cw == m or v.ccw == m])
+        set_twist = TWIST_CW if best_votes.cw > best_votes.ccw else TWIST_CCW
+        color_edge(bm.edges[best_edge], set_twist)
+
+    return coloring
 
 
 def get_offset(weave_up, weave_down, twist, forward):
@@ -341,6 +482,13 @@ class CelticKnotOperator(bpy.types.Operator):
     bl_label = "Celtic Knot"
     bl_options = {'REGISTER', 'UNDO', 'PRESET'}
 
+    weave_types = [("CELTIC","Celtic","All crossings use same orientation"),
+                   ("TWILL","Twill","Over two then under two")]
+    weave_type = bpy.props.EnumProperty(items=weave_types,
+                                         name="Weave Type",
+                                         description="Determines which crossings are over or under",
+                                         default="CELTIC")
+
     weave_up = bpy.props.FloatProperty(name="Weave Up",
                                        description="Distance to shift curve upwards over knots",
                                        subtype="DISTANCE",
@@ -396,6 +544,7 @@ class CelticKnotOperator(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
+        layout.prop(self, "weave_type")
         layout.prop(self, "weave_up")
         layout.prop(self, "weave_down")
         layout.prop(self, "output_type")
@@ -423,7 +572,11 @@ class CelticKnotOperator(bpy.types.Operator):
         obj = context.active_object
         bm = bmesh.new()
         bm.from_mesh(obj.data)
-        twists = get_celtic_twists(bm)
+        if self.weave_type == "CELTIC":
+            twists = get_celtic_twists(bm)
+        else:
+            twists = get_twill_twists(bm)
+
         if self.output_type in (BEZIER, PIPE):
             curve_obj = create_bezier(context, bm, twists,
                           self.crossing_angle,
