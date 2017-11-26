@@ -160,7 +160,8 @@ def get_twill_twists(bm):
                 return Votes(0, 1)
         return Votes(1, 1)
 
-    def count_votes(edge):
+    def count_votes(edge_index):
+        edge = bm.edges[edge_index]
         votes = Votes()
         assert len(edge.link_loops) == 2
         loop1 = edge.link_loops[0]
@@ -186,6 +187,7 @@ def get_twill_twists(bm):
     # Initialize
     frontier = set()
     coloring = [None] * len(bm.edges)
+    cached_votes = {}
 
     def color_edge(edge, twist):
         if edge.index in frontier:
@@ -195,6 +197,20 @@ def get_twill_twists(bm):
             for other in v.link_edges:
                 if coloring[other.index] is None:
                     frontier.add(other.index)
+        # Clear cached votes
+        cached_votes.pop(edge.index, None)
+        for v1 in edge.verts:
+            for e2 in v1.link_edges:
+                for v2 in e2.verts:
+                    if v1.index == v2.index: continue
+                    for e3 in v2.link_edges:
+                        cached_votes.pop(e3.index, None)
+
+    def get_cached_vote(edge_index):
+        if edge_index in cached_votes:
+            return cached_votes[edge_index]
+        else:
+            return cached_votes.setdefault(edge_index, count_votes(edge_index))
 
     v0 = randrange(len(bm.verts))
     for e in bm.verts[v0].link_edges:
@@ -202,7 +218,7 @@ def get_twill_twists(bm):
 
     # Color the best choice of edge
     while frontier:
-        votes = {e: count_votes(bm.edges[e]) for e in frontier}
+        votes = {e: get_cached_vote(e) for e in frontier}
         m = max(max(v.cw, v.ccw) for v in votes.values())
         best_edge, best_votes = choice([(k, v) for (k, v) in votes.items() if v.cw == m or v.ccw == m])
         set_twist = TWIST_CW if best_votes.cw > best_votes.ccw else TWIST_CCW
