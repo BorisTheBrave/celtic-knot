@@ -101,7 +101,7 @@ class DirectedLoop:
             return DirectedLoop(loop, forward)
 
 
-def get_celtic_twists(bm):
+def get_celtic_twists(bm, twist_prob):
     """Gets a twist per edge for celtic knot style patterns.
     These are also called "plain weavings"."""
     seed(0)
@@ -110,7 +110,7 @@ def get_celtic_twists(bm):
         if len(edge.link_loops) == 0:
             twists.append(IGNORE)
         else:
-            if random() < 0.5:
+            if random() < twist_prob:
                 twists.append(TWIST_CW)
             else:
                 twists.append(STRAIGHT)
@@ -625,6 +625,13 @@ class CelticKnotOperator(bpy.types.Operator):
                                          description="Distance to shift curve downward under knots",
                                          subtype="DISTANCE",
                                          unit="LENGTH")
+    twist_proportion = bpy.props.FloatProperty(name="Twist Proportion",
+                                               description="Percent of edges that twist.",
+                                               subtype="PERCENTAGE",
+                                               unit="NONE",
+                                               default=1.0,
+                                               min=0.0,
+                                               max=1.0)
     output_types = [(BEZIER, "Bezier", "Bezier curve"),
                     (PIPE, "Pipe", "Rounded solid mesh"),
                     (RIBBON, "Ribbon", "Flat plane mesh")]
@@ -675,6 +682,8 @@ class CelticKnotOperator(bpy.types.Operator):
         layout.prop(self, "weave_type")
         layout.prop(self, "weave_up")
         layout.prop(self, "weave_down")
+        if self.weave_type == "CELTIC":
+            layout.prop(self, "twist_proportion")
         layout.prop(self, "output_type")
         if self.output_type in (BEZIER, PIPE):
             layout.prop(self, "handle_type")
@@ -701,7 +710,7 @@ class CelticKnotOperator(bpy.types.Operator):
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         if self.weave_type == "CELTIC":
-            twists = get_celtic_twists(bm)
+            twists = get_celtic_twists(bm, self.twist_proportion)
         else:
             twists = get_twill_twists(bm)
 
