@@ -70,6 +70,49 @@ def get_celtic_twists(bm):
     return twists
 
 
+def strand_part(prev_loop, loop, forward):
+    return forward, frozenset((prev_loop.index, loop.index))
+
+
+class ClusterBraidsBuilder:
+    def __init__(self):
+        self.crossings = defaultdict(list)
+        self.current_strand_index = 0
+        self.strand_indices = {}
+
+    def start_strand(self):
+        pass
+
+    def add_loop(self, prev_loop, loop, twist, forward):
+        if twist != STRAIGHT:
+            self.crossings[loop.edge.index].append(self.current_strand_index)
+        self.strand_indices[strand_part(prev_loop, loop, forward)] = self.current_strand_index
+
+    def end_strand(self):
+        self.current_strand_index += 1
+
+    def all_crossings(self):
+        return set(frozenset([x, y]) for l in self.crossings.values() for x in l for y in l if x != y)
+
+    def get_strands(self):
+        return self.strand_indices
+
+    def get_braids(self):
+        crossings = self.all_crossings()
+        braids = defaultdict(list)
+        braid_count = 0
+        for s in range(self.current_strand_index):
+            crossed_braids = set(braids[t] for p in crossings if s in p for t in p if t in braids)
+            for b in range(braid_count):
+                if b not in crossed_braids:
+                    break
+            else:
+                b = braid_count
+                braid_count += 1
+            braids[s] = b
+        return {k: braids[v] for (k, v) in self.strand_indices.items()}
+
+
 def get_twill_twists(bm):
     # Largely based off "Cyclic Twill-Woven Objects", Akleman, Chen, Chen, Xing, Gross (2011)
     seed(0)
@@ -241,15 +284,18 @@ def lerp(v1, v2, t):
 
 
 class RibbonBuilder:
-    def __init__(self, weave_up, weave_down, length, breadth):
+    def __init__(self, weave_up, weave_down, length, breadth, materials=None):
         self.weave_up = weave_up
         self.weave_down = weave_down
         self.vertices = []
         self.faces = []
         self.prev_out_verts = None
         self.first_in_verts = None
+        self.prev_material = None
         self.c = length
         self.w = breadth
+        self.materials = materials or defaultdict(int)
+        self.material_values = []
 
     def get_sub_face(self, v1, v2, v3, v4):
         hc = self.c / 2.0
@@ -264,6 +310,7 @@ class RibbonBuilder:
     def start_strand(self):
         self.first_in_verts = None
         self.prev_out_verts = None
+        self.prev_material = None
 
     def add_loop(self, prev_loop, loop, twist, forward):
         normal = loop.calc_normal() + prev_loop.calc_normal()
@@ -286,6 +333,9 @@ class RibbonBuilder:
 
         v1, center1, v2, center2 = self.get_sub_face(v1, center1, v2, center2)
 
+        self.prev_material = material = self.materials[strand_part(prev_loop, loop, forward)]
+
+
         i = len(self.vertices)
         self.vertices.append(v1 + offset)
         self.vertices.append(center1 + offset)
@@ -293,7 +343,9 @@ class RibbonBuilder:
         self.vertices.append(center2 + offset)
         # self.faces.append([i, i+1, i+2, i+3])
         self.faces.append([i, i + 1, i + 2])
+        self.material_values.append(material)
         self.faces.append([i, i + 2, i + 3])
+        self.material_values.append(material)
         in_verts = [i + 1, i + 0]
         out_verts = [i + 3, i + 2]
 
@@ -301,14 +353,17 @@ class RibbonBuilder:
             self.first_in_verts = in_verts
         if self.prev_out_verts is not None:
             self.faces.append(self.prev_out_verts + in_verts)
+            self.material_values.append(material)
         self.prev_out_verts = out_verts
 
     def end_strand(self):
         self.faces.append(self.prev_out_verts + self.first_in_verts)
+        self.material_values.append(self.prev_material)
 
     def make_mesh(self):
         me = bpy.data.meshes.new("")
         me.from_pydata(self.vertices, [], self.faces)
+        me.polygons.foreach_set("material_index", self.material_values)
         me.update(calc_edges=True)
         return me
 
@@ -463,15 +518,36 @@ def create_bezier(context, bm, twists,
     context.scene.objects.active = orig_obj
     return curve_obj
 
+def make_material(name, diffuse):
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = diffuse
+    mat.diffuse_shader = 'LAMBERT'
+    mat.diffuse_intensity = 1.0
+    mat.specular_color = (1, 1, 1)
+    mat.specular_shader = 'COOKTORR'
+    mat.specular_intensity = 0.5
+    mat.alpha = 1
+    mat.ambient = 1
+    return mat
 
 def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth):
-    builder = RibbonBuilder(weave_up, weave_down, length, breadth)
+    braider = ClusterBraidsBuilder()
+    visit_strands(bm, twists, braider)
+    builder = RibbonBuilder(weave_up, weave_down, length, breadth, braider.get_braids())
     visit_strands(bm, twists, builder)
     mesh = builder.make_mesh()
     orig_obj = context.active_object
     object_utils.object_data_add(context, mesh, operator=None)
     mesh_obj = context.active_object
     context.scene.objects.active = orig_obj
+
+    mesh.materials.append(make_material('Red', (1, 0, 0)))
+    mesh.materials.append(make_material('Green', (0, 1, 0)))
+    mesh.materials.append(make_material('Blue', (0, 0, 1)))
+    mesh.materials.append(make_material('Yellow', (1, 1, 0)))
+    mesh.materials.append(make_material('Teal', (0, 1, 1)))
+    mesh.materials.append(make_material('Magenta', (1, 0, 1)))
+
     return mesh_obj
 
 
