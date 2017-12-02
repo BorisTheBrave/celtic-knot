@@ -56,6 +56,10 @@ PIPE = "PIPE"
 RIBBON = "RIBBON"
 
 
+def is_boundary(loop):
+    return len(loop.link_loops) == 0
+
+
 class DirectedLoop:
     def __init__(self, loop, forward):
         self.loop = loop
@@ -75,7 +79,7 @@ class DirectedLoop:
                 loop = loop.link_loop_next
             else:
                 loop = loop.link_loop_prev
-            if len(loop.link_loops) != 0:
+            if not is_boundary(loop):
                 break
         return DirectedLoop(loop, forward)
 
@@ -261,17 +265,39 @@ def get_twill_twists(bm):
         else:
             return cached_votes.setdefault(edge_index, count_votes(edge_index))
 
-    v0 = randrange(len(bm.verts))
-    for e in bm.verts[v0].link_edges:
-        color_edge(e, TWIST_CW)
+    # For each disconnected island of edges
+    while True:
+        uncolored = [i for i, color in enumerate(coloring) if color is None]
+        if not uncolored:
+            break
 
-    # Color the best choice of edge
-    while frontier:
-        votes = {e: get_cached_vote(e) for e in frontier}
-        m = max(max(v.cw, v.ccw) for v in votes.values())
-        best_edge, best_votes = choice([(k, v) for (k, v) in votes.items() if v.cw == m or v.ccw == m])
-        set_twist = TWIST_CW if best_votes.cw > best_votes.ccw else TWIST_CCW
-        color_edge(bm.edges[best_edge], set_twist)
+        # Pick a random point
+        v0 = choice(bm.edges[choice(uncolored)].verts)
+
+        # Set initial coloring
+        for e in v0.link_edges:
+            color_edge(e, TWIST_CW)
+
+        # Explore from frontier
+        while frontier:
+            # First clear out any boundaries from the frontier
+            while True:
+                found_boundaries = False
+                for e in list(frontier):
+                    edge = bm.edges[e]
+                    if is_boundary(edge.link_loops[0]):
+                        color_edge(edge, IGNORE)
+                        found_boundaries = True
+                if not found_boundaries:
+                    break
+            # Color the best choice of edge
+            votes = {e: get_cached_vote(e) for e in frontier}
+            m = max(max(v.cw, v.ccw) for v in votes.values())
+            best_edge, best_votes = choice([(k, v) for (k, v) in votes.items() if v.cw == m or v.ccw == m])
+            set_twist = TWIST_CW if best_votes.cw > best_votes.ccw else TWIST_CCW
+            color_edge(bm.edges[best_edge], set_twist)
+
+    assert all(coloring), "Failed to assign some twists when computing twill"
 
     return coloring
 
@@ -283,6 +309,8 @@ def get_offset(weave_up, weave_down, twist, forward):
         return weave_down if forward else weave_up
     elif twist is STRAIGHT:
         return (weave_down + weave_up) / 2.0
+    else:
+        assert False, "Unexpected twist type " + twist
 
 
 def lerp(v1, v2, t):
@@ -482,7 +510,7 @@ def visit_strands(bm, twists, builder):
     # Attempt to start a loop at each untouched loop in the entire mesh
     for face in bm.faces:
         for loop in face.loops:
-            if len(loop.link_loops) == 0: continue
+            if is_boundary(loop): continue
             if not loops_exited[loop]: make_loop(DirectedLoop(loop, True))
             if not loops_entered[loop]: make_loop(DirectedLoop(loop, False))
 
