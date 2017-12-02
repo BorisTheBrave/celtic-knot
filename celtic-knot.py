@@ -417,7 +417,7 @@ class RibbonBuilder:
 
 class BezierBuilder:
     """Builds a bezier object containing a curve for each strand."""
-    def __init__(self, bm, crossing_angle, crossing_strength, handle_type, weave_up, weave_down):
+    def __init__(self, bm, crossing_angle, crossing_strength, handle_type, weave_up, weave_down, materials=None):
         # Cache some values
         self.s = sin(crossing_angle) * crossing_strength
         self.c = cos(crossing_angle) * crossing_strength
@@ -428,6 +428,7 @@ class BezierBuilder:
         self.curve = bpy.data.curves.new("Celtic", "CURVE")
         self.curve.dimensions = "3D"
         self.curve.twist_mode = "MINIMUM"
+        setup_materials(self.curve.materials)
         # Compute all the midpoints of each edge
         self.midpoints = []
         for e in bm.edges:
@@ -441,6 +442,8 @@ class BezierBuilder:
         self.handle_lefts = None
         self.handle_rights = None
         self.first = True
+        self.materials = materials or defaultdict(int)
+        self.current_material = None
 
     def start_strand(self):
         self.current_spline = self.curve.splines.new("BEZIER")
@@ -451,6 +454,7 @@ class BezierBuilder:
         self.cos = []
         self.handle_lefts = []
         self.handle_rights = []
+        self.current_material = None
         self.first = True
 
     def add_loop(self, prev_loop, loop, twist, forward):
@@ -463,6 +467,9 @@ class BezierBuilder:
         offset = get_offset(self.weave_up, self.weave_down, twist, forward) * normal
         midpoint = midpoint + offset
         self.cos.extend(midpoint)
+
+        self.current_material = self.materials[strand_part(prev_loop, loop, forward)]
+
         if self.handle_type != "AUTO":
             tangent = loop.link_loop_next.vert.co - loop.vert.co
             tangent.normalize()
@@ -478,6 +485,8 @@ class BezierBuilder:
     def end_strand(self):
         points = self.current_spline.bezier_points
         points.foreach_set("co", self.cos)
+        print(self.current_material)
+        self.current_spline.material_index = self.current_material
         if self.handle_type != "AUTO":
             points.foreach_set("handle_left", self.handle_lefts)
             points.foreach_set("handle_right", self.handle_rights)
@@ -531,11 +540,35 @@ def visit_strands(bm, twists, builder):
             if not loops_entered[loop]: make_loop(DirectedLoop(loop, False))
 
 
+def make_material(name, diffuse):
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = diffuse
+    mat.diffuse_shader = 'LAMBERT'
+    mat.diffuse_intensity = 1.0
+    mat.specular_color = (1, 1, 1)
+    mat.specular_shader = 'COOKTORR'
+    mat.specular_intensity = 0.5
+    mat.alpha = 1
+    mat.ambient = 1
+    return mat
+
+
+def setup_materials(materials):
+    materials.append(make_material('Red', (1, 0, 0)))
+    materials.append(make_material('Green', (0, 1, 0)))
+    materials.append(make_material('Blue', (0, 0, 1)))
+    materials.append(make_material('Yellow', (1, 1, 0)))
+    materials.append(make_material('Teal', (0, 1, 1)))
+    materials.append(make_material('Magenta', (1, 0, 1)))
+
+
 def create_bezier(context, bm, twists,
-                  crossing_angle, crossing_strength, handle_type, weave_up, weave_down):
-    builder = BezierBuilder(bm, crossing_angle, crossing_strength, handle_type, weave_up, weave_down)
+                  crossing_angle, crossing_strength, handle_type, weave_up, weave_down, materials):
+    builder = BezierBuilder(bm, crossing_angle, crossing_strength, handle_type, weave_up, weave_down, materials)
     visit_strands(bm, twists, builder)
     curve = builder.curve
+
+    print([s.material_index for s in curve.splines])
 
     orig_obj = context.active_object
     # Create an object from the curve
@@ -550,26 +583,13 @@ def create_bezier(context, bm, twists,
     # Restore active selection
     curve_obj = context.active_object
     context.scene.objects.active = orig_obj
+
+
     return curve_obj
 
 
-def make_material(name, diffuse):
-    mat = bpy.data.materials.new(name)
-    mat.diffuse_color = diffuse
-    mat.diffuse_shader = 'LAMBERT'
-    mat.diffuse_intensity = 1.0
-    mat.specular_color = (1, 1, 1)
-    mat.specular_shader = 'COOKTORR'
-    mat.specular_intensity = 0.5
-    mat.alpha = 1
-    mat.ambient = 1
-    return mat
-
-
-def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth):
-    braider = ClusterBraidsBuilder()
-    visit_strands(bm, twists, braider)
-    builder = RibbonBuilder(weave_up, weave_down, length, breadth, braider.get_braids())
+def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth, materials):
+    builder = RibbonBuilder(weave_up, weave_down, length, breadth, materials)
     visit_strands(bm, twists, builder)
     mesh = builder.make_mesh()
     orig_obj = context.active_object
@@ -577,12 +597,7 @@ def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth):
     mesh_obj = context.active_object
     context.scene.objects.active = orig_obj
 
-    mesh.materials.append(make_material('Red', (1, 0, 0)))
-    mesh.materials.append(make_material('Green', (0, 1, 0)))
-    mesh.materials.append(make_material('Blue', (0, 0, 1)))
-    mesh.materials.append(make_material('Yellow', (1, 1, 0)))
-    mesh.materials.append(make_material('Teal', (0, 1, 1)))
-    mesh.materials.append(make_material('Magenta', (1, 0, 1)))
+    setup_materials(mesh.materials)
 
     return mesh_obj
 
@@ -714,19 +729,24 @@ class CelticKnotOperator(bpy.types.Operator):
         else:
             twists = get_twill_twists(bm)
 
+        braid_builder = ClusterBraidsBuilder()
+        visit_strands(bm, twists, braid_builder)
+        materials = braid_builder.get_braids()
+
         if self.output_type in (BEZIER, PIPE):
             curve_obj = create_bezier(context, bm, twists,
-                          self.crossing_angle,
-                          self.crossing_strength,
-                          self.handle_type,
-                          self.weave_up,
-                          self.weave_down)
+                                      self.crossing_angle,
+                                      self.crossing_strength,
+                                      self.handle_type,
+                                      self.weave_up,
+                                      self.weave_down,
+                                      materials)
 
             # If thick, then give it a bevel_object and convert to mesh
             if self.output_type == PIPE and self.thickness > 0:
                 create_pipe_from_bezier(context, curve_obj, self.thickness)
         else:
-            create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length, self.breadth)
+            create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length, self.breadth, materials)
         return {'FINISHED'}
 
 
