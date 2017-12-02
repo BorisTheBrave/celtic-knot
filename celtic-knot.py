@@ -57,10 +57,12 @@ RIBBON = "RIBBON"
 
 
 def is_boundary(loop):
+    """Is a given loop on the boundary of a manifold (only connected to one face)"""
     return len(loop.link_loops) == 0
 
 
 class DirectedLoop:
+    """Stores an edge loop and a particular facing along it."""
     def __init__(self, loop, forward):
         self.loop = loop
         self.forward = forward
@@ -100,6 +102,8 @@ class DirectedLoop:
 
 
 def get_celtic_twists(bm):
+    """Gets a twist per edge for celtic knot style patterns.
+    These are also called "plain weavings"."""
     seed(0)
     twists = []
     for edge in bm.edges:
@@ -114,10 +118,12 @@ def get_celtic_twists(bm):
 
 
 def strand_part(prev_loop, loop, forward):
+    """A strand part uniquely identifies one point on a strande
+    crossing a particular edge."""
     return forward, frozenset((prev_loop.index, loop.index))
 
-
 class ClusterBraidsBuilder:
+    """Computes information about which strand parts belong to which strands."""
     def __init__(self):
         self.crossings = defaultdict(list)
         self.current_strand_index = 0
@@ -141,6 +147,8 @@ class ClusterBraidsBuilder:
         return self.strand_indices
 
     def get_braids(self):
+        """Partitions the strands so any two crossing strands are in separate partitions.
+        Each partition is called a braid."""
         crossings = self.all_crossings()
         braids = defaultdict(list)
         braid_count = 0
@@ -157,7 +165,11 @@ class ClusterBraidsBuilder:
 
 
 def get_twill_twists(bm):
-    # Largely based off "Cyclic Twill-Woven Objects", Akleman, Chen, Chen, Xing, Gross (2011)
+    """Gets twists per edge that describe a pattern where each strand goes over 2 then under 2,
+    and adjacent strands have the pattern offset by one.
+    This is heuristic, it's not always possible for some meshes.
+    Largely based off "Cyclic Twill-Woven Objects", Akleman, Chen, Chen, Xing, Gross (2011)
+    """
     seed(0)
     bm.verts.ensure_lookup_table()
     bm.edges.ensure_lookup_table()
@@ -318,6 +330,7 @@ def lerp(v1, v2, t):
 
 
 class RibbonBuilder:
+    """Builds a mesh containing a polygonal ribbon for each strand."""
     def __init__(self, weave_up, weave_down, length, breadth, materials=None):
         self.weave_up = weave_up
         self.weave_down = weave_down
@@ -403,6 +416,7 @@ class RibbonBuilder:
 
 
 class BezierBuilder:
+    """Builds a bezier object containing a curve for each strand."""
     def __init__(self, bm, crossing_angle, crossing_strength, handle_type, weave_up, weave_down):
         # Cache some values
         self.s = sin(crossing_angle) * crossing_strength
@@ -470,6 +484,8 @@ class BezierBuilder:
 
 
 def visit_strands(bm, twists, builder):
+    """Walks over a mesh strand by strand turning at each edge by the specified twists,
+    calling visitor methods on the given builder for each edge crossed."""
     # Stores which loops the curve has already passed through
     loops_entered = defaultdict(lambda: False)
     loops_exited = defaultdict(lambda: False)
@@ -536,6 +552,7 @@ def create_bezier(context, bm, twists,
     context.scene.objects.active = orig_obj
     return curve_obj
 
+
 def make_material(name, diffuse):
     mat = bpy.data.materials.new(name)
     mat.diffuse_color = diffuse
@@ -547,6 +564,7 @@ def make_material(name, diffuse):
     mat.alpha = 1
     mat.ambient = 1
     return mat
+
 
 def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth):
     braider = ClusterBraidsBuilder()
@@ -702,10 +720,12 @@ class CelticKnotOperator(bpy.types.Operator):
             create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length, self.breadth)
         return {'FINISHED'}
 
+
 def menu_func(self, context):
     self.layout.operator(CelticKnotOperator.bl_idname,
                          text="Celtic Knot From Mesh",
                          icon='PLUGIN')
+
 
 def register():
     bpy.utils.register_module(__name__)
@@ -715,6 +735,7 @@ def register():
 def unregister():
     bpy.types.INFO_MT_curve_add.remove(menu_func)
     bpy.utils.unregister_module(__name__)
+
 
 if __name__ == "__main__":
     register()
