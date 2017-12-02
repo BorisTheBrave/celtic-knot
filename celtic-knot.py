@@ -428,7 +428,7 @@ class BezierBuilder:
         self.curve = bpy.data.curves.new("Celtic", "CURVE")
         self.curve.dimensions = "3D"
         self.curve.twist_mode = "MINIMUM"
-        setup_materials(self.curve.materials)
+        setup_materials(self.curve.materials, materials)
         # Compute all the midpoints of each edge
         self.midpoints = []
         for e in bm.edges:
@@ -553,13 +553,14 @@ def make_material(name, diffuse):
     return mat
 
 
-def setup_materials(materials):
-    materials.append(make_material('Red', (1, 0, 0)))
-    materials.append(make_material('Green', (0, 1, 0)))
-    materials.append(make_material('Blue', (0, 0, 1)))
-    materials.append(make_material('Yellow', (1, 1, 0)))
-    materials.append(make_material('Teal', (0, 1, 1)))
-    materials.append(make_material('Magenta', (1, 0, 1)))
+def setup_materials(materials_array, materials):
+    if materials is not None:
+        materials_array.append(make_material('Red', (1, 0, 0)))
+        materials_array.append(make_material('Green', (0, 1, 0)))
+        materials_array.append(make_material('Blue', (0, 0, 1)))
+        materials_array.append(make_material('Yellow', (1, 1, 0)))
+        materials_array.append(make_material('Teal', (0, 1, 1)))
+        materials_array.append(make_material('Magenta', (1, 0, 1)))
 
 
 def create_bezier(context, bm, twists,
@@ -597,7 +598,7 @@ def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth, ma
     mesh_obj = context.active_object
     context.scene.objects.active = orig_obj
 
-    setup_materials(mesh.materials)
+    setup_materials(mesh.materials, materials)
 
     return mesh_obj
 
@@ -691,6 +692,13 @@ class CelticKnotOperator(bpy.types.Operator):
                                       default=0.5,
                                       soft_min=0.0,
                                       soft_max=1.0)
+    coloring_types = [("NONE", "None", "No colors"),
+                      ("STRAND", "Per strand", "Assign a unique material to every strand."),
+                      ("BRAID", "Per braid", "Use as few materials as possible while preserving crossings.")]
+    coloring_type = bpy.props.EnumProperty(items=coloring_types,
+                                         name="Coloring",
+                                         description="Controls what materials are assigned to the created object",
+                                         default="NONE")
 
     def draw(self, context):
         layout = self.layout
@@ -710,6 +718,7 @@ class CelticKnotOperator(bpy.types.Operator):
             layout.prop(self, "breadth")
         if self.output_type == PIPE:
             layout.prop(self, "thickness")
+        layout.prop(self, "coloring_type")
 
     @classmethod
     def poll(cls, context):
@@ -729,9 +738,15 @@ class CelticKnotOperator(bpy.types.Operator):
         else:
             twists = get_twill_twists(bm)
 
-        braid_builder = ClusterBraidsBuilder()
-        visit_strands(bm, twists, braid_builder)
-        materials = braid_builder.get_braids()
+        if self.coloring_type == "NONE":
+            materials = None
+        else:
+            braid_builder = ClusterBraidsBuilder()
+            visit_strands(bm, twists, braid_builder)
+            if self.coloring_type == "STRAND":
+                materials = braid_builder.get_strands()
+            else:
+                materials = braid_builder.get_braids()
 
         if self.output_type in (BEZIER, PIPE):
             curve_obj = create_bezier(context, bm, twists,
