@@ -56,6 +56,45 @@ PIPE = "PIPE"
 RIBBON = "RIBBON"
 
 
+class DirectedLoop:
+    def __init__(self, loop, forward):
+        self.loop = loop
+        self.forward = forward
+
+    @property
+    def reversed(self):
+        return DirectedLoop(self.loop, not self.forward)
+
+    @property
+    def next_face_loop(self):
+        loop = self.loop
+        forward = self.forward
+        # Follow the face around, ignoring boundary edges
+        while True:
+            if forward:
+                loop = loop.link_loop_next
+            else:
+                loop = loop.link_loop_prev
+            if len(loop.link_loops) != 0:
+                break
+        return DirectedLoop(loop, forward)
+
+    @property
+    def next_edge_loop(self):
+        loop = self.loop
+        forward = self.forward
+        if forward:
+            v = loop.vert.index
+            loop = loop.link_loops[0]
+            forward = (loop.vert.index == v) == forward
+            return DirectedLoop(loop, forward)
+        else:
+            v = loop.vert.index
+            loop = loop.link_loops[-1]
+            forward = (loop.vert.index == v) == forward
+            return DirectedLoop(loop, forward)
+
+
 def get_celtic_twists(bm):
     seed(0)
     twists = []
@@ -119,36 +158,11 @@ def get_twill_twists(bm):
     bm.verts.ensure_lookup_table()
     bm.edges.ensure_lookup_table()
 
-    def move(loop, forward):
-        """Advances the loop one along the braid in the direction indicated,
-        also returning the new loop-local direction consistent with the passed in one."""
-        if forward:
-            # Follow the face around, ignoring boundary edges
-            loop = loop.link_loop_next
-            v = loop.vert.index
-            # Find next radial loop
-            assert loop.link_loops[0] != loop
-            loop = loop.link_loops[0]
-            forward = loop.vert.index == v
-            return loop, forward
-        else:
-            # Follow the face around, ignoring boundary edges
-            v = loop.vert.index
-            loop = loop.link_loop_prev
-            # Find next radial loop
-            assert loop.link_loops[-1] != loop
-            loop = loop.link_loops[-1]
-            forward = loop.vert.index == v
-            return loop, forward
+    def move(d):
+        return d.next_face_loop.next_edge_loop
 
-    def swap(loop, forward):
-        """Switch from a loop to its partner on the same edge,
-        also returning the new loop-local direction consistent with the passed in one."""
-        v = loop.vert.index
-        assert len(loop.link_loops) == 1, "Found link loop of size {}, only manifold meshes supported currently".format(len(loop.link_loops))
-        loop = loop.link_loops[0]
-        forward = (loop.vert.index == v) == forward
-        return loop, forward
+    def swap(d):
+        return d.next_edge_loop
 
     class Votes:
         def __init__(self, cw=0, ccw=0):
@@ -158,11 +172,11 @@ def get_twill_twists(bm):
         def __add__(self, other):
             return Votes(self.cw + other.cw, self.ccw + other.ccw)
 
-    def edge_cond_vote(loop, forward):
-        next, next_forward = move(loop, forward)
-        next2, _ = move(next, next_forward)
-        twist1 = coloring[next.edge.index]
-        twist2 = coloring[next2.edge.index]
+    def edge_cond_vote(dloop):
+        next = move(dloop)
+        next2 = move(next)
+        twist1 = coloring[next.loop.edge.index]
+        twist2 = coloring[next2.loop.edge.index]
         if twist1 is None or twist2 is None:
             return Votes()
         if twist1 is TWIST_CW and twist2 is TWIST_CW:
@@ -171,13 +185,13 @@ def get_twill_twists(bm):
             return Votes(1, 0)
         return Votes(1, 1)
 
-    def face_cond_vote(loop, forward):
-        s, s_forward = move(loop, forward)
-        p, _ = move(*swap(loop, not forward))
-        f, _ = move(*swap(s, s_forward))
-        twist_s = coloring[s.edge.index]
-        twist_p = coloring[p.edge.index]
-        twist_f = coloring[f.edge.index]
+    def face_cond_vote(dloop):
+        s = move(dloop)
+        p = move(swap(dloop.reversed))
+        f = move(swap(s))
+        twist_s = coloring[s.loop.edge.index]
+        twist_p = coloring[p.loop.edge.index]
+        twist_f = coloring[f.loop.edge.index]
         if twist_s is None or twist_p is None or twist_f is None:
             return Votes()
         if twist_p != twist_f:
@@ -187,13 +201,13 @@ def get_twill_twists(bm):
                 return Votes(0, 1)
         return Votes(1, 1)
 
-    def vert_cond_vote(loop, forward):
-        s, s_forward = move(loop, forward)
-        p, _ = move(*swap(loop, forward))
-        f, _ = move(*swap(s, not s_forward))
-        twist_s = coloring[s.edge.index]
-        twist_p = coloring[p.edge.index]
-        twist_f = coloring[f.edge.index]
+    def vert_cond_vote(dloop):
+        s = move(dloop)
+        p = move(swap(dloop))
+        f = move(swap(s.reversed))
+        twist_s = coloring[s.loop.edge.index]
+        twist_p = coloring[p.loop.edge.index]
+        twist_f = coloring[f.loop.edge.index]
         if twist_s is None or twist_p is None or twist_f is None:
             return Votes()
         if twist_p != twist_f:
@@ -206,24 +220,16 @@ def get_twill_twists(bm):
     def count_votes(edge_index):
         edge = bm.edges[edge_index]
         votes = Votes()
-        assert len(edge.link_loops) == 2
-        loop1 = edge.link_loops[0]
-        loop2 = edge.link_loops[1]
-        # Edge condition votes
-        votes += edge_cond_vote(loop1, True)
-        votes += edge_cond_vote(loop1, False)
-        votes += edge_cond_vote(loop2, True)
-        votes += edge_cond_vote(loop2, False)
-        # Face condition votes
-        votes += face_cond_vote(loop1, True)
-        votes += face_cond_vote(loop1, False)
-        votes += face_cond_vote(loop2, True)
-        votes += face_cond_vote(loop2, False)
-        # Vert condition votes
-        votes += vert_cond_vote(loop1, True)
-        votes += vert_cond_vote(loop1, False)
-        votes += vert_cond_vote(loop2, True)
-        votes += vert_cond_vote(loop2, False)
+        for loop in edge.link_loops:
+            # Edge condition votes
+            votes += edge_cond_vote(DirectedLoop(loop, True))
+            votes += edge_cond_vote(DirectedLoop(loop, False))
+            # Face condition votes
+            votes += face_cond_vote(DirectedLoop(loop, True))
+            votes += face_cond_vote(DirectedLoop(loop, False))
+            # Vert condition votes
+            votes += vert_cond_vote(DirectedLoop(loop, True))
+            votes += vert_cond_vote(DirectedLoop(loop, False))
 
         return votes
 
@@ -440,61 +446,45 @@ def visit_strands(bm, twists, builder):
     loops_entered = defaultdict(lambda: False)
     loops_exited = defaultdict(lambda: False)
 
-    # Loops on the boundary of a surface
-    def ignorable_loop(loop):
-        return len(loop.link_loops) == 0
-
-    # Starting at loop, build a curve one vertex at a time
+    # Starting at directed loop, build a curve one vertex at a time
     # until we start where we came from
     # Forward means that for any two edges the loop crosses
     # sharing a face, it is passing through in clockwise order
     # else anticlockwise
-    def make_loop(loop, forward):
+    def make_loop(d):
         builder.start_strand()
         while True:
-            if forward:
-                if loops_exited[loop]: break
-                loops_exited[loop] = True
-                # Follow the face around, ignoring boundary edges
-                while True:
-                    loop = loop.link_loop_next
-                    if not ignorable_loop(loop): break
-                assert loops_entered[loop] == False
-                loops_entered[loop] = True
-                v = loop.vert.index
-                prev_loop = loop
+            if d.forward:
+                if loops_exited[d.loop]: break
+                loops_exited[d.loop] = True
+                d = d.next_face_loop
+                assert loops_entered[d.loop] == False
+                loops_entered[d.loop] = True
+                prev_loop = d.loop
                 # Find next radial loop
-                twist = twists[loop.edge.index]
+                twist = twists[d.loop.edge.index]
                 if twist in (TWIST_CCW, TWIST_CW):
-                    assert loop.link_loops[0] != loop
-                    loop = loop.link_loops[0]
-                forward = loop.vert.index == v
+                    d = d.next_edge_loop
             else:
-                if loops_entered[loop]: break
-                loops_entered[loop] = True
-                # Follow the face around, ignoring boundary edges
-                while True:
-                    v = loop.vert.index
-                    loop = loop.link_loop_prev
-                    if not ignorable_loop(loop): break
-                assert loops_exited[loop] == False
-                loops_exited[loop] = True
-                prev_loop = loop
+                if loops_entered[d.loop]: break
+                loops_entered[d.loop] = True
+                d = d.next_face_loop
+                assert loops_exited[d.loop] == False
+                loops_exited[d.loop] = True
+                prev_loop = d.loop
                 # Find next radial loop
-                twist = twists[loop.edge.index]
+                twist = twists[d.loop.edge.index]
                 if twist in (TWIST_CCW, TWIST_CW):
-                    assert loop.link_loops[-1] != loop
-                    loop = loop.link_loops[-1]
-                forward = loop.vert.index == v
-            builder.add_loop(prev_loop, loop, twist, forward)
+                    d = d.next_edge_loop
+            builder.add_loop(prev_loop, d.loop, twist, d.forward)
         builder.end_strand()
 
     # Attempt to start a loop at each untouched loop in the entire mesh
     for face in bm.faces:
         for loop in face.loops:
-            if ignorable_loop(loop): continue
-            if not loops_exited[loop]: make_loop(loop, True)
-            if not loops_entered[loop]: make_loop(loop, False)
+            if len(loop.link_loops) == 0: continue
+            if not loops_exited[loop]: make_loop(DirectedLoop(loop, True))
+            if not loops_entered[loop]: make_loop(DirectedLoop(loop, False))
 
 
 def create_bezier(context, bm, twists,
