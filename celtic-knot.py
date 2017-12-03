@@ -65,6 +65,14 @@ def is_boundary(loop):
 def lerp(v1, v2, t):
     return v1 * (1 - t) + v2 * t
 
+def cyclic_zip(l):
+    i = iter(l)
+    first = prev = next(i)
+    for item in i:
+        yield prev, item
+        prev = item
+    yield prev, first
+
 
 def edge_midpoint(edge):
     v1 = edge.verts[0]
@@ -101,6 +109,7 @@ def remesh_midedge_subdivision(bm):
         edge_index_to_new_index[edge.index] = new_vert_count
         new_verts.append(edge_midpoint(edge))
         new_vert_count += 1
+    # Add a face per face in the original mesh, with twice as many vertices
     for face in bm.faces:
         new_face = []
         for loop in face.loops:
@@ -110,8 +119,49 @@ def remesh_midedge_subdivision(bm):
     return bmesh_from_pydata(new_verts, new_faces)
 
 
+def remesh_medial(bm):
+    edge_index_to_new_index = {}
+    vert_index_to_new_index = {}
+    new_vert_count = 0
+    new_verts = []
+    new_faces = []
+    for vert in bm.verts:
+        vert_index_to_new_index[vert.index] = new_vert_count
+        new_verts.append(vert.co)
+        new_vert_count += 1
+    for edge in bm.edges:
+        edge_index_to_new_index[edge.index] = new_vert_count
+        new_verts.append(edge_midpoint(edge))
+        new_vert_count += 1
+    # Add a face for each face in the original mesh
+    for face in bm.faces:
+        new_face = []
+        for loop in face.loops:
+            new_face.append(edge_index_to_new_index[loop.edge.index])
+        new_faces.append(new_face)
+    # Add a fan for each vert in the original mesh
+    for vert in bm.verts:
+        if len(vert.link_loops) <= 1:
+            continue
+        v0 = vert_index_to_new_index[vert.index]
+        loop0 = vert.link_loops[0]
+        vert_edges = []
+        first = d = DirectedLoop(loop0, loop0.vert.index != vert.index)
+        while True:
+            vert_edges.append(d.loop.edge)
+            d = d.next_face_loop.next_edge_loop.reversed
+            if d.loop == first.loop:
+                break
+        for edge1, edge2 in cyclic_zip(vert_edges):
+            v1 = edge_index_to_new_index[edge1.index]
+            v2 = edge_index_to_new_index[edge2.index]
+            new_faces.append([v0, v1, v2])
+    return bmesh_from_pydata(new_verts, new_faces)
+
+
 REMESH_TYPES = [("NONE", "None", ""),
-                ("EDGE_SUBDIVIDE", "EDGE_SUBDIVIDE", "Subdivide every edge")]
+                ("EDGE_SUBDIVIDE", "Edge Subdivide", "Subdivide every edge"),
+                ("MEDIAL", "Medial", "Replace every vertex with a fan of faces")]
 
 
 def remesh(bm, remesh_type):
@@ -119,6 +169,8 @@ def remesh(bm, remesh_type):
         return bm
     if remesh_type == "EDGE_SUBDIVIDE":
         return remesh_midedge_subdivision(bm)
+    if remesh_type == "MEDIAL":
+        return remesh_medial(bm)
 
 
 class DirectedLoop:
@@ -126,6 +178,7 @@ class DirectedLoop:
     def __init__(self, loop, forward):
         self.loop = loop
         self.forward = forward
+
 
     @property
     def reversed(self):
@@ -823,18 +876,26 @@ class CelticKnotOperator(bpy.types.Operator):
 class GeometricRemeshOperator(bpy.types.Operator):
     bl_idname = "object.geometric_remesh_operator"
     bl_label = "Geometric Remesh"
+    bl_options = {'REGISTER', 'UNDO'}
 
     remesh_type = bpy.props.EnumProperty(items=[t for t in REMESH_TYPES if t[0] != "NONE"],
                                          name="Remesh Type",
                                          description="Pre-process the mesh before weaving",
-                                         default="NONE")
+                                         default="EDGE_SUBDIVIDE")
+
+    @classmethod
+    def poll(cls, context):
+        ob = context.active_object
+        return ((ob is not None) and
+                (ob.mode == "OBJECT") and
+                (ob.type == "MESH") and
+                (context.mode == "OBJECT"))
 
     def execute(self, context):
         obj = context.active_object
-        obj = context.active_object
         bm = bmesh.new()
         bm.from_mesh(obj.data)
-        bm = remesh_midedge_subdivision(bm)
+        bm = remesh(bm, self.remesh_type)
         bm.to_mesh(obj.data)
         return {'FINISHED'}
 
