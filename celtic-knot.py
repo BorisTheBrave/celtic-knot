@@ -55,10 +55,70 @@ BEZIER = "BEZIER"
 PIPE = "PIPE"
 RIBBON = "RIBBON"
 
+## General math utilites
 
 def is_boundary(loop):
     """Is a given loop on the boundary of a manifold (only connected to one face)"""
     return len(loop.link_loops) == 0
+
+
+def lerp(v1, v2, t):
+    return v1 * (1 - t) + v2 * t
+
+
+def edge_midpoint(edge):
+    v1 = edge.verts[0]
+    v2 = edge.verts[1]
+    return (v1.co + v2.co) / 2.0
+
+
+def bmesh_from_pydata(vertices, faces):
+    bm = bmesh.new()
+    for v in vertices:
+        bm.verts.new(v)
+    bm.verts.index_update()
+    bm.verts.ensure_lookup_table()
+    for f in faces:
+        bm.faces.new([bm.verts[v] for v in f])
+    bm.edges.index_update()
+    bm.edges.ensure_lookup_table()
+    return bm
+
+
+## Remeshing operations (replacing one bmesh with another)
+
+def remesh_midedge_subdivision(bm):
+    edge_index_to_new_index = {}
+    vert_index_to_new_index = {}
+    new_vert_count = 0
+    new_verts = []
+    new_faces = []
+    for vert in bm.verts:
+        vert_index_to_new_index[vert.index] = new_vert_count
+        new_verts.append(vert.co)
+        new_vert_count += 1
+    for edge in bm.edges:
+        edge_index_to_new_index[edge.index] = new_vert_count
+        new_verts.append(edge_midpoint(edge))
+        new_vert_count += 1
+    for face in bm.faces:
+        new_face = []
+        for loop in face.loops:
+            new_face.append(vert_index_to_new_index[loop.vert.index])
+            new_face.append(edge_index_to_new_index[loop.edge.index])
+        new_faces.append(new_face)
+    return bmesh_from_pydata(new_verts, new_faces)
+
+
+REMESH_TYPES = [("NONE", "None", ""),
+                ("EDGE_SUBDIVIDE", "EDGE_SUBDIVIDE", "Subdivide every edge")]
+
+
+def remesh(bm, remesh_type):
+    if remesh_type is None or remesh_type == "NONE":
+        return bm
+    if remesh_type == "EDGE_SUBDIVIDE":
+        return remesh_midedge_subdivision(bm)
 
 
 class DirectedLoop:
@@ -325,10 +385,6 @@ def get_offset(weave_up, weave_down, twist, forward):
         assert False, "Unexpected twist type " + twist
 
 
-def lerp(v1, v2, t):
-    return v1 * (1 - t) + v2 * t
-
-
 class RibbonBuilder:
     """Builds a mesh containing a polygonal ribbon for each strand."""
     def __init__(self, weave_up, weave_down, length, breadth, materials=None):
@@ -432,10 +488,7 @@ class BezierBuilder:
         # Compute all the midpoints of each edge
         self.midpoints = []
         for e in bm.edges:
-            v1 = e.verts[0]
-            v2 = e.verts[1]
-            m = (v1.co + v2.co) / 2.0
-            self.midpoints.append(m)
+            self.midpoints.append(edge_midpoint(e))
         # Per strand stuff
         self.current_spline = None
         self.cos = None
@@ -485,7 +538,6 @@ class BezierBuilder:
     def end_strand(self):
         points = self.current_spline.bezier_points
         points.foreach_set("co", self.cos)
-        print(self.current_material)
         self.current_spline.material_index = self.current_material
         if self.handle_type != "AUTO":
             points.foreach_set("handle_left", self.handle_lefts)
@@ -569,8 +621,6 @@ def create_bezier(context, bm, twists,
     visit_strands(bm, twists, builder)
     curve = builder.curve
 
-    print([s.material_index for s in curve.splines])
-
     orig_obj = context.active_object
     # Create an object from the curve
     object_utils.object_data_add(context, curve, operator=None)
@@ -625,6 +675,11 @@ class CelticKnotOperator(bpy.types.Operator):
     bl_idname = "object.celtic_knot_operator"
     bl_label = "Celtic Knot"
     bl_options = {'REGISTER', 'UNDO', 'PRESET'}
+
+    remesh_type = bpy.props.EnumProperty(items=REMESH_TYPES,
+                                         name="Remesh Type",
+                                         description="Pre-process the mesh before weaving",
+                                         default="NONE")
 
     weave_types = [("CELTIC","Celtic","All crossings use same orientation"),
                    ("TWILL","Twill","Over two then under two")]
@@ -702,6 +757,7 @@ class CelticKnotOperator(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
+        layout.prop(self, "remesh_type")
         layout.prop(self, "weave_type")
         layout.prop(self, "weave_up")
         layout.prop(self, "weave_down")
@@ -723,7 +779,6 @@ class CelticKnotOperator(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         ob = context.active_object
-        #return True
         return ((ob is not None) and
                 (ob.mode == "OBJECT") and
                 (ob.type == "MESH") and
@@ -733,6 +788,7 @@ class CelticKnotOperator(bpy.types.Operator):
         obj = context.active_object
         bm = bmesh.new()
         bm.from_mesh(obj.data)
+        bm = remesh(bm, self.remesh_type)
         if self.weave_type == "CELTIC":
             twists = get_celtic_twists(bm, self.twist_proportion)
         else:
@@ -764,6 +820,23 @@ class CelticKnotOperator(bpy.types.Operator):
             create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length, self.breadth, materials)
         return {'FINISHED'}
 
+class GeometricRemeshOperator(bpy.types.Operator):
+    bl_idname = "object.geometric_remesh_operator"
+    bl_label = "Geometric Remesh"
+
+    remesh_type = bpy.props.EnumProperty(items=[t for t in REMESH_TYPES if t[0] != "NONE"],
+                                         name="Remesh Type",
+                                         description="Pre-process the mesh before weaving",
+                                         default="NONE")
+
+    def execute(self, context):
+        obj = context.active_object
+        obj = context.active_object
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm = remesh_midedge_subdivision(bm)
+        bm.to_mesh(obj.data)
+        return {'FINISHED'}
 
 def menu_func(self, context):
     self.layout.operator(CelticKnotOperator.bl_idname,
