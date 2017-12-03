@@ -90,6 +90,11 @@ def bmesh_from_pydata(vertices, faces):
         bm.faces.new([bm.verts[v] for v in f])
     bm.edges.index_update()
     bm.edges.ensure_lookup_table()
+    i = 0
+    for edge in bm.edges:
+        for loop in edge.link_loops:
+            loop.index = i
+            i += 1
     return bm
 
 
@@ -841,12 +846,17 @@ class CelticKnotOperator(bpy.types.Operator):
         obj = context.active_object
         bm = bmesh.new()
         bm.from_mesh(obj.data)
+
+        # Apply remesh if desired
         bm = remesh(bm, self.remesh_type)
+
+        # Compute twists
         if self.weave_type == "CELTIC":
             twists = get_celtic_twists(bm, self.twist_proportion)
         else:
             twists = get_twill_twists(bm)
 
+        # Assign materials to strand parts
         if self.coloring_type == "NONE":
             materials = None
         else:
@@ -857,6 +867,7 @@ class CelticKnotOperator(bpy.types.Operator):
             else:
                 materials = braid_builder.get_braids()
 
+        # Build a mesh (or curve) object from the above
         if self.output_type in (BEZIER, PIPE):
             curve_obj = create_bezier(context, bm, twists,
                                       self.crossing_angle,
