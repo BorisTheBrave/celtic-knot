@@ -240,13 +240,16 @@ def strand_part(prev_loop, loop, forward):
     crossing a particular edge."""
     return forward, frozenset((prev_loop.index, loop.index))
 
-class ClusterBraidsBuilder:
+
+class StrandAnalysisBuilder:
     """Computes information about which strand parts belong to which strands."""
     def __init__(self):
         self.crossings = defaultdict(list)
         self.current_strand_index = 0
         self.strand_indices = {}
+        self.strand_size = defaultdict(int)
 
+    # Builder methods
     def start_strand(self):
         pass
 
@@ -254,6 +257,7 @@ class ClusterBraidsBuilder:
         if twist != STRAIGHT:
             self.crossings[loop.edge.index].append(self.current_strand_index)
         self.strand_indices[strand_part(prev_loop, loop, forward)] = self.current_strand_index
+        self.strand_size[self.current_strand_index] += 1
 
     def end_strand(self):
         self.current_strand_index += 1
@@ -262,11 +266,16 @@ class ClusterBraidsBuilder:
         return set(frozenset([x, y]) for l in self.crossings.values() for x in l for y in l if x != y)
 
     def get_strands(self):
+        """Returns a dict of strand parts to integers"""
         return self.strand_indices
+
+    def get_strand_sizes(self):
+        return self.strand_size
 
     def get_braids(self):
         """Partitions the strands so any two crossing strands are in separate partitions.
-        Each partition is called a braid."""
+        Each partition is called a braid.
+        Returns a dict of strand parts to integers"""
         crossings = self.all_crossings()
         braids = defaultdict(list)
         braid_count = 0
@@ -445,7 +454,9 @@ def get_offset(weave_up, weave_down, twist, forward):
 
 class RibbonBuilder:
     """Builds a mesh containing a polygonal ribbon for each strand."""
-    def __init__(self, weave_up, weave_down, length, breadth, materials=None):
+    def __init__(self, weave_up, weave_down, length, breadth,
+                 strand_analysis=None,
+                 materials=None):
         self.weave_up = weave_up
         self.weave_down = weave_down
         self.vertices = []
@@ -455,8 +466,11 @@ class RibbonBuilder:
         self.prev_material = None
         self.c = length
         self.w = breadth
+        self.strand_analysis = strand_analysis
+        self.uvs = []
         self.materials = materials or defaultdict(int)
         self.material_values = []
+        self.count = 0
 
     def get_sub_face(self, v1, v2, v3, v4):
         hc = self.c / 2.0
@@ -472,6 +486,16 @@ class RibbonBuilder:
         self.first_in_verts = None
         self.prev_out_verts = None
         self.prev_material = None
+        self.count = 0
+
+    def add_vertex(self, vert_co, u, v):
+        self.vertices.append(vert_co)
+        if u is not None and v is not None:
+            self.uvs.append((u, v))
+
+    def add_face(self, vertices, material):
+        self.faces.append(vertices)
+        self.material_values.append(material)
 
     def add_loop(self, prev_loop, loop, twist, forward):
         normal = loop.calc_normal() + prev_loop.calc_normal()
@@ -494,19 +518,26 @@ class RibbonBuilder:
 
         v1, center1, v2, center2 = self.get_sub_face(v1, center1, v2, center2)
 
-        self.prev_material = material = self.materials[strand_part(prev_loop, loop, forward)]
+        sp = strand_part(prev_loop, loop, forward)
+        self.prev_material = material = self.materials[sp]
 
+        if self.strand_analysis:
+            strand_index = self.strand_analysis.get_strands()[sp]
+            strand_size = self.strand_analysis.get_strand_sizes()[strand_index]
+            u1 = (self.count + 0.5 - self.c / 2.0) / strand_size
+            u2 = (self.count + 0.5 + self.c / 2.0) / strand_size
+        else:
+            u1 = None
+            u2 = None
 
         i = len(self.vertices)
-        self.vertices.append(v1 + offset)
-        self.vertices.append(center1 + offset)
-        self.vertices.append(v2 + offset)
-        self.vertices.append(center2 + offset)
-        # self.faces.append([i, i+1, i+2, i+3])
-        self.faces.append([i, i + 1, i + 2])
-        self.material_values.append(material)
-        self.faces.append([i, i + 2, i + 3])
-        self.material_values.append(material)
+        self.add_vertex(v1 + offset, u1, 0)
+        self.add_vertex(center1 + offset, u1, 1)
+        self.add_vertex(v2 + offset, u2, 1)
+        self.add_vertex(center2 + offset, u2, 0)
+        # self.add_face([i, i+1, i+2, i+3], material)
+        self.add_face([i, i + 1, i + 2], material)
+        self.add_face([i, i + 2, i + 3], material)
         in_verts = [i + 1, i + 0]
         out_verts = [i + 3, i + 2]
 
@@ -516,6 +547,7 @@ class RibbonBuilder:
             self.faces.append(self.prev_out_verts + in_verts)
             self.material_values.append(material)
         self.prev_out_verts = out_verts
+        self.count += 1
 
     def end_strand(self):
         self.faces.append(self.prev_out_verts + self.first_in_verts)
@@ -523,8 +555,15 @@ class RibbonBuilder:
 
     def make_mesh(self):
         me = bpy.data.meshes.new("")
+        # Create mesh
         me.from_pydata(self.vertices, [], self.faces)
+        # Set materials
         me.polygons.foreach_set("material_index", self.material_values)
+        # Set UVs (see https://blender.stackexchange.com/a/8239)
+        me.uv_textures.new("")
+        uv_layer = me.uv_layers[0]
+        uv_layer.data.foreach_set("uv", [uv for pair in [self.uvs[l.vertex_index] for l in me.loops] for uv in pair])
+        # Recompute basic values
         me.update(calc_edges=True)
         return me
 
@@ -697,8 +736,9 @@ def create_bezier(context, bm, twists,
     return curve_obj
 
 
-def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth, materials):
-    builder = RibbonBuilder(weave_up, weave_down, length, breadth, materials)
+def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth,
+                  strand_analysis, materials):
+    builder = RibbonBuilder(weave_up, weave_down, length, breadth, strand_analysis, materials)
     visit_strands(bm, twists, builder)
     mesh = builder.make_mesh()
     orig_obj = context.active_object
@@ -857,15 +897,23 @@ class CelticKnotOperator(bpy.types.Operator):
             twists = get_twill_twists(bm)
 
         # Assign materials to strand parts
+        strand_analysis = StrandAnalysisBuilder()
+        has_analysis = False
+
+        def get_analysis():
+            nonlocal has_analysis
+            if not has_analysis:
+                visit_strands(bm, twists, strand_analysis)
+                has_analysis = True
+            return strand_analysis
+
         if self.coloring_type == "NONE":
             materials = None
         else:
-            braid_builder = ClusterBraidsBuilder()
-            visit_strands(bm, twists, braid_builder)
             if self.coloring_type == "STRAND":
-                materials = braid_builder.get_strands()
+                materials = get_analysis().get_strands()
             else:
-                materials = braid_builder.get_braids()
+                materials = get_analysis().get_braids()
 
         # Build a mesh (or curve) object from the above
         if self.output_type in (BEZIER, PIPE):
@@ -881,8 +929,10 @@ class CelticKnotOperator(bpy.types.Operator):
             if self.output_type == PIPE and self.thickness > 0:
                 create_pipe_from_bezier(context, curve_obj, self.thickness)
         else:
-            create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length, self.breadth, materials)
+            create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length, self.breadth,
+                          get_analysis(), materials)
         return {'FINISHED'}
+
 
 class GeometricRemeshOperator(bpy.types.Operator):
     bl_idname = "object.geometric_remesh_operator"
