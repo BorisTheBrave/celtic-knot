@@ -462,7 +462,9 @@ class RibbonBuilder:
         self.vertices = []
         self.faces = []
         self.prev_out_verts = None
+        self.prev_out_uvs = None
         self.first_in_verts = None
+        self.first_in_uvs = None
         self.prev_material = None
         self.c = length
         self.w = breadth
@@ -484,17 +486,18 @@ class RibbonBuilder:
 
     def start_strand(self):
         self.first_in_verts = None
+        self.first_in_uvs = None
         self.prev_out_verts = None
+        self.prev_out_uvs = None
         self.prev_material = None
         self.count = 0
 
-    def add_vertex(self, vert_co, u, v):
+    def add_vertex(self, vert_co):
         self.vertices.append(vert_co)
-        if u is not None and v is not None:
-            self.uvs.append((u, v))
 
-    def add_face(self, vertices, material):
+    def add_face(self, vertices, uvs, material):
         self.faces.append(vertices)
+        self.uvs.extend(uvs)
         self.material_values.append(material)
 
     def add_loop(self, prev_loop, loop, twist, forward):
@@ -524,34 +527,39 @@ class RibbonBuilder:
         if self.strand_analysis:
             strand_index = self.strand_analysis.get_strands()[sp]
             strand_size = self.strand_analysis.get_strand_sizes()[strand_index]
-            u1 = (self.count + 0.5 - self.c / 2.0) / strand_size
-            u2 = (self.count + 0.5 + self.c / 2.0) / strand_size
+            u1 = (self.count + 0) / strand_size
+            u2 = (self.count + self.c) / strand_size
         else:
             u1 = None
             u2 = None
 
         i = len(self.vertices)
-        self.add_vertex(v1 + offset, u1, 0)
-        self.add_vertex(center1 + offset, u1, 1)
-        self.add_vertex(v2 + offset, u2, 1)
-        self.add_vertex(center2 + offset, u2, 0)
-        # self.add_face([i, i+1, i+2, i+3], material)
-        self.add_face([i, i + 1, i + 2], material)
-        self.add_face([i, i + 2, i + 3], material)
+        self.add_vertex(v1 + offset)
+        self.add_vertex(center1 + offset)
+        self.add_vertex(v2 + offset)
+        self.add_vertex(center2 + offset)
+        self.add_face([i, i + 1, i + 2], [u1, 0, u1, 1, u2, 1], material)
+        self.add_face([i, i + 2, i + 3], [u1, 0, u2, 1, u2, 0], material)
         in_verts = [i + 1, i + 0]
+        in_uvs = [u1, 1, u1, 0]
         out_verts = [i + 3, i + 2]
+        out_uvs = [u2, 0, u2, 1]
 
         if self.first_in_verts is None:
             self.first_in_verts = in_verts
+            self.first_in_uvs = [u1 + 1, 1, u1 + 1, 0]
         if self.prev_out_verts is not None:
-            self.faces.append(self.prev_out_verts + in_verts)
-            self.material_values.append(material)
+            self.add_face(self.prev_out_verts + in_verts,
+                          self.prev_out_uvs + in_uvs,
+                          material)
         self.prev_out_verts = out_verts
+        self.prev_out_uvs = out_uvs
         self.count += 1
 
     def end_strand(self):
-        self.faces.append(self.prev_out_verts + self.first_in_verts)
-        self.material_values.append(self.prev_material)
+        self.add_face(self.prev_out_verts + self.first_in_verts,
+                      self.prev_out_uvs + self.first_in_uvs,
+                      self.prev_material)
 
     def make_mesh(self):
         me = bpy.data.meshes.new("")
@@ -559,10 +567,9 @@ class RibbonBuilder:
         me.from_pydata(self.vertices, [], self.faces)
         # Set materials
         me.polygons.foreach_set("material_index", self.material_values)
-        # Set UVs (see https://blender.stackexchange.com/a/8239)
         me.uv_textures.new("")
         uv_layer = me.uv_layers[0]
-        uv_layer.data.foreach_set("uv", [uv for pair in [self.uvs[l.vertex_index] for l in me.loops] for uv in pair])
+        uv_layer.data.foreach_set("uv", self.uvs)
         # Recompute basic values
         me.update(calc_edges=True)
         return me
