@@ -38,7 +38,7 @@ import bpy
 import bmesh
 from bpy_extras import object_utils
 from collections import defaultdict
-from mathutils import Vector
+from mathutils import Color
 from math import pi, sin, cos
 from random import random, seed, choice, randrange
 
@@ -711,12 +711,11 @@ def make_material(name, diffuse):
 
 def setup_materials(materials_array, materials):
     if materials is not None:
-        materials_array.append(make_material('Red', (1, 0, 0)))
-        materials_array.append(make_material('Green', (0, 1, 0)))
-        materials_array.append(make_material('Blue', (0, 0, 1)))
-        materials_array.append(make_material('Yellow', (1, 1, 0)))
-        materials_array.append(make_material('Teal', (0, 1, 1)))
-        materials_array.append(make_material('Magenta', (1, 0, 1)))
+        material_count = len(set(materials.values()))
+        c = Color()
+        for i in range(material_count):
+            c.hsv = (i / float(material_count), 0.7, 0.25)
+            materials_array.append(make_material("CelticKnot", c))
 
 
 def create_bezier(context, bm, twists,
