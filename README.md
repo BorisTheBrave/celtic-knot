@@ -1,8 +1,8 @@
 Celtic Knot
 =====================
 
-This Blender plugin generates 3d beziers curves in elaborate "celtic" style knotwork, based 
-off of a framework mesh. Tested with Blender 2.68a.
+This Blender plugin generates bezier curves, pipes and ribbons in elaborate weavings,
+based off of a framework mesh. Tested with Blender 2.79.
 
 Installation
 ------------

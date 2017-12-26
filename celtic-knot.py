@@ -27,8 +27,8 @@ bl_info = {
     "name": "Celtic Knot",
     "description": "",
     "author": "Adam Newgas",
-    "version": (0,1,2),
-    "blender": (2, 68, 0),
+    "version": (1, 0, 0),
+    "blender": (2, 79, 0),
     "location": "View3D > Add > Curve",
     "warning": "",
     "wiki_url": "https://github.com/BorisTheBrave/celtic-knot/wiki",
@@ -443,9 +443,9 @@ def get_twill_twists(bm):
 
 def get_offset(weave_up, weave_down, twist, forward):
     if twist is TWIST_CW:
-        return weave_up if forward else weave_down
-    elif twist is TWIST_CCW:
         return weave_down if forward else weave_up
+    elif twist is TWIST_CCW:
+        return weave_up if forward else weave_down
     elif twist is STRAIGHT:
         return (weave_down + weave_up) / 2.0
     else:
@@ -863,11 +863,11 @@ class CelticKnotOperator(bpy.types.Operator):
         layout = self.layout
         layout.prop(self, "remesh_type")
         layout.prop(self, "weave_type")
-        layout.prop(self, "weave_up")
-        layout.prop(self, "weave_down")
         if self.weave_type == "CELTIC":
             layout.prop(self, "twist_proportion")
         layout.prop(self, "output_type")
+        layout.prop(self, "weave_up")
+        layout.prop(self, "weave_down")
         if self.output_type in (BEZIER, PIPE):
             layout.prop(self, "handle_type")
             if self.handle_type != "AUTO":
