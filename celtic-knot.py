@@ -144,23 +144,14 @@ def remesh_medial(bm):
         for loop in face.loops:
             new_face.append(edge_index_to_new_index[loop.edge.index])
         new_faces.append(new_face)
-    # Add a fan for each vert in the original mesh
-    for vert in bm.verts:
-        if len(vert.link_loops) <= 1:
-            continue
-        v0 = vert_index_to_new_index[vert.index]
-        loop0 = vert.link_loops[0]
-        vert_edges = []
-        first = d = DirectedLoop(loop0, loop0.vert.index != vert.index)
-        while True:
-            vert_edges.append(d.loop.edge)
-            d = d.next_face_loop.next_edge_loop.reversed
-            if d.loop == first.loop:
-                break
-        for edge1, edge2 in cyclic_zip(vert_edges):
-            v1 = edge_index_to_new_index[edge1.index]
-            v2 = edge_index_to_new_index[edge2.index]
-            new_faces.append([v0, v1, v2])
+    # Add a triangle for each vert of each face
+    for face in bm.faces:
+        for loop1, loop2 in cyclic_zip(face.loops):
+            v0 = vert_index_to_new_index[loop2.vert.index]
+            v1 = edge_index_to_new_index[loop1.edge.index]
+            v2 = edge_index_to_new_index[loop2.edge.index]
+            new_faces.append([v0, v2, v1])
+
     return bmesh_from_pydata(new_verts, new_faces)
 
 
