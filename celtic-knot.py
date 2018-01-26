@@ -227,7 +227,7 @@ def get_celtic_twists(bm, twist_prob):
 
 
 def strand_part(prev_loop, loop, forward):
-    """A strand part uniquely identifies one point on a strande
+    """A strand part uniquely identifies one point on a strand
     crossing a particular edge."""
     return forward, frozenset((prev_loop.index, loop.index))
 
@@ -282,6 +282,15 @@ class StrandAnalysisBuilder:
         return {k: braids[v] for (k, v) in self.strand_indices.items()}
 
 
+def get_medial_twill_twists(bm, orig_face_len):
+    """Gets twists per edge assuming bm has been transformed by remesh_medial."""
+    twists = [TWIST_CW] * len(bm.edges)
+    for face in bm.faces[0:orig_face_len]:
+        for edge in face.edges:
+            twists[edge.index] = TWIST_CCW
+    return twists
+
+
 def get_twill_twists(bm):
     """Gets twists per edge that describe a pattern where each strand goes over 2 then under 2,
     and adjacent strands have the pattern offset by one.
@@ -317,7 +326,10 @@ def get_twill_twists(bm):
             return Votes(0, 1)
         if twist1 is TWIST_CCW and twist2 is TWIST_CCW:
             return Votes(1, 0)
-        return Votes(1, 1)
+        if twist1 is TWIST_CW:
+            return Votes(1, 0)
+        else:
+            return Votes(0, 1)
 
     def face_cond_vote(dloop):
         s = move(dloop)
@@ -407,6 +419,7 @@ def get_twill_twists(bm):
         # Set initial coloring
         for e in v0.link_edges:
             color_edge(e, TWIST_CW)
+            break
 
         # Explore from frontier
         while frontier:
@@ -881,7 +894,7 @@ class CelticKnotOperator(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.active_object
-        bm = bmesh.new()
+        orig_bm = bm = bmesh.new()
         bm.from_mesh(obj.data)
 
         # Apply remesh if desired
@@ -891,7 +904,10 @@ class CelticKnotOperator(bpy.types.Operator):
         if self.weave_type == "CELTIC":
             twists = get_celtic_twists(bm, self.twist_proportion)
         else:
-            twists = get_twill_twists(bm)
+            if self.remesh_type == "MEDIAL":
+                twists = get_medial_twill_twists(bm, len(orig_bm.faces))
+            else:
+                twists = get_twill_twists(bm)
 
         # Assign materials to strand parts
         strand_analysis = StrandAnalysisBuilder()
