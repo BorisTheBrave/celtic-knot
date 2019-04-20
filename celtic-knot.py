@@ -507,7 +507,7 @@ class RibbonBuilder:
     def add_loop(self, prev_loop, loop, twist, forward):
         normal = loop.calc_normal() + prev_loop.calc_normal()
         normal.normalize()
-        offset = get_offset(self.weave_up, self.weave_down, twist, forward) * normal
+        offset = -get_offset(self.weave_up, self.weave_down, twist, forward) * normal
 
         center1 = prev_loop.face.calc_center_median()
         center2 = loop.face.calc_center_median()
@@ -625,7 +625,7 @@ class BezierBuilder:
         midpoint = self.midpoints[loop.edge.index]
         normal = loop.calc_normal() + prev_loop.calc_normal()
         normal.normalize()
-        offset = get_offset(self.weave_up, self.weave_down, twist, forward) * normal
+        offset = -get_offset(self.weave_up, self.weave_down, twist, forward) * normal
         midpoint = midpoint + offset
         self.cos.extend(midpoint)
 
