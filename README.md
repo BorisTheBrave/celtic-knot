@@ -2,18 +2,13 @@ Celtic Knot
 =====================
 
 This Blender plugin generates bezier curves, pipes and ribbons in elaborate weavings,
-based off of a framework mesh. Tested with Blender 2.79.
+based off of a framework mesh. Tested with Blender 2.80.
 
 Installation
 ------------
-Install Blender, then put `celtic-knot.py` in your plugins directory [location is listed here][1]. Restart Blender, then go to `File > User Preferences > Addons`, and search for the Celtic Knot plugin, enabling it.
+Go to `Edit > Preferences > Add-ons` and click `Install...`. Select `celtic-knot-py`, and click the checkbox to enable it.
 
 [1]: http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons
-
-Uninstalling
-------------
-
-Delete the files added in installation.
 
 Usage
 -----
