@@ -803,9 +803,9 @@ class CelticKnotOperator(bpy.types.Operator):
                                                description="Percent of edges that twist.",
                                                subtype="PERCENTAGE",
                                                unit="NONE",
-                                               default=1.0,
+                                               default=100.0,
                                                min=0.0,
-                                               max=1.0)
+                                               max=100.0)
     output_types = [(BEZIER, "Bezier", "Bezier curve"),
                     (PIPE, "Pipe", "Rounded solid mesh"),
                     (RIBBON, "Ribbon", "Flat plane mesh")]
@@ -840,16 +840,16 @@ class CelticKnotOperator(bpy.types.Operator):
                                      description="Percent along faces that the ribbon runs parallel",
                                      subtype="PERCENTAGE",
                                      unit="NONE",
-                                     default=0.9,
+                                     default=90,
                                      soft_min=0.0,
-                                     soft_max=1.0)
+                                     soft_max=100.0)
     breadth: bpy.props.FloatProperty(name="Breadth",
                                       description="Ribbon width as a percentage across faces.",
                                       subtype="PERCENTAGE",
                                       unit="NONE",
-                                      default=0.5,
+                                      default=50,
                                       soft_min=0.0,
-                                      soft_max=1.0)
+                                      soft_max=100.0)
     coloring_types = [("NONE", "None", "No colors"),
                       ("STRAND", "Per strand", "Assign a unique material to every strand."),
                       ("BRAID", "Per braid", "Use as few materials as possible while preserving crossings.")]
@@ -897,7 +897,7 @@ class CelticKnotOperator(bpy.types.Operator):
 
         # Compute twists
         if self.weave_type == "CELTIC":
-            twists = get_celtic_twists(bm, self.twist_proportion)
+            twists = get_celtic_twists(bm, self.twist_proportion / 100)
         else:
             if self.remesh_type == "MEDIAL":
                 twists = get_medial_twill_twists(bm, len(orig_bm.faces))
@@ -937,7 +937,7 @@ class CelticKnotOperator(bpy.types.Operator):
             if self.output_type == PIPE and self.thickness > 0:
                 create_pipe_from_bezier(context, curve_obj, self.thickness)
         else:
-            create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length, self.breadth,
+            create_ribbon(context, bm, twists, self.weave_up, self.weave_down, self.length / 100, self.breadth / 100,
                           get_analysis(), materials)
         return {'FINISHED'}
 
