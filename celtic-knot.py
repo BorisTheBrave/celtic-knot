@@ -27,7 +27,7 @@ bl_info = {
     "name": "Celtic Knot",
     "description": "",
     "author": "Adam Newgas",
-    "version": (1, 0, 0),
+    "version": (2, 0, 0),
     "blender": (2, 80, 0),
     "location": "View3D > Add > Curve",
     "warning": "",
