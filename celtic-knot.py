@@ -28,7 +28,7 @@ bl_info = {
     "description": "",
     "author": "Adam Newgas",
     "version": (1, 0, 0),
-    "blender": (2, 79, 0),
+    "blender": (2, 80, 0),
     "location": "View3D > Add > Curve",
     "warning": "",
     "wiki_url": "https://github.com/BorisTheBrave/celtic-knot/wiki",
@@ -571,7 +571,7 @@ class RibbonBuilder:
         me.from_pydata(self.vertices, [], self.faces)
         # Set materials
         me.polygons.foreach_set("material_index", self.material_values)
-        me.uv_textures.new("")
+        me.uv_layers.new(name = "")
         uv_layer = me.uv_layers[0]
         uv_layer.data.foreach_set("uv", self.uvs)
         # Recompute basic values
@@ -620,7 +620,7 @@ class BezierBuilder:
 
     def add_loop(self, prev_loop, loop, twist, forward):
         if not self.first:
-            self.current_spline.bezier_points.add()
+            self.current_spline.bezier_points.add(1)
         self.first = False
         midpoint = self.midpoints[loop.edge.index]
         normal = loop.calc_normal() + prev_loop.calc_normal()
@@ -702,14 +702,9 @@ def visit_strands(bm, twists, builder):
 
 def make_material(name, diffuse):
     mat = bpy.data.materials.new(name)
-    mat.diffuse_color = diffuse
-    mat.diffuse_shader = 'LAMBERT'
-    mat.diffuse_intensity = 1.0
-    mat.specular_color = (1, 1, 1)
-    mat.specular_shader = 'COOKTORR'
+    mat.diffuse_color = (*diffuse ,1.0)
     mat.specular_intensity = 0.5
-    mat.alpha = 1
-    mat.ambient = 1
+
     return mat
 
 
@@ -740,7 +735,7 @@ def create_bezier(context, bm, twists,
     bpy.ops.object.editmode_toggle()
     # Restore active selection
     curve_obj = context.active_object
-    context.scene.objects.active = orig_obj
+    context.view_layer.objects.active = orig_obj
 
 
     return curve_obj
@@ -754,7 +749,7 @@ def create_ribbon(context, bm, twists, weave_up, weave_down, length, breadth,
     orig_obj = context.active_object
     object_utils.object_data_add(context, mesh, operator=None)
     mesh_obj = context.active_object
-    context.scene.objects.active = orig_obj
+    context.view_layer.objects.active = orig_obj
 
     setup_materials(mesh.materials, materials)
 
@@ -766,17 +761,17 @@ def create_pipe_from_bezier(context, curve_obj, thickness):
     bpy.ops.transform.resize(value=(thickness,) * 3)
     circle = context.active_object
     curve_obj.data.bevel_object = circle
-    curve_obj.select = True
-    context.scene.objects.active = curve_obj
+    curve_obj.select_set(True)
+    context.view_layer.objects.active = curve_obj
     # For some reason only works with keep_original=True
     bpy.ops.object.convert(target="MESH", keep_original=True)
-    new_obj = context.scene.objects.active
-    new_obj.select = False
-    curve_obj.select = True
-    circle.select = True
+    new_obj = context.view_layer.objects.active
+    new_obj.select_set(False)
+    curve_obj.select_set(True)
+    circle.select_set(True)
     bpy.ops.object.delete()
-    new_obj.select = True
-    context.scene.objects.active = new_obj
+    new_obj.select_set(True)
+    context.view_layer.objects.active = new_obj
 
 
 class CelticKnotOperator(bpy.types.Operator):
@@ -784,27 +779,27 @@ class CelticKnotOperator(bpy.types.Operator):
     bl_label = "Celtic Knot"
     bl_options = {'REGISTER', 'UNDO', 'PRESET'}
 
-    remesh_type = bpy.props.EnumProperty(items=REMESH_TYPES,
+    remesh_type: bpy.props.EnumProperty(items=REMESH_TYPES,
                                          name="Remesh Type",
                                          description="Pre-process the mesh before weaving",
                                          default="NONE")
 
     weave_types = [("CELTIC","Celtic","All crossings use same orientation"),
                    ("TWILL","Twill","Over two then under two")]
-    weave_type = bpy.props.EnumProperty(items=weave_types,
+    weave_type: bpy.props.EnumProperty(items=weave_types,
                                          name="Weave Type",
                                          description="Determines which crossings are over or under",
                                          default="CELTIC")
 
-    weave_up = bpy.props.FloatProperty(name="Weave Up",
+    weave_up: bpy.props.FloatProperty(name="Weave Up",
                                        description="Distance to shift curve upwards over knots",
                                        subtype="DISTANCE",
                                        unit="LENGTH")
-    weave_down = bpy.props.FloatProperty(name="Weave Down",
+    weave_down: bpy.props.FloatProperty(name="Weave Down",
                                          description="Distance to shift curve downward under knots",
                                          subtype="DISTANCE",
                                          unit="LENGTH")
-    twist_proportion = bpy.props.FloatProperty(name="Twist Proportion",
+    twist_proportion: bpy.props.FloatProperty(name="Twist Proportion",
                                                description="Percent of edges that twist.",
                                                subtype="PERCENTAGE",
                                                unit="NONE",
@@ -814,41 +809,41 @@ class CelticKnotOperator(bpy.types.Operator):
     output_types = [(BEZIER, "Bezier", "Bezier curve"),
                     (PIPE, "Pipe", "Rounded solid mesh"),
                     (RIBBON, "Ribbon", "Flat plane mesh")]
-    output_type = bpy.props.EnumProperty(items=output_types,
+    output_type: bpy.props.EnumProperty(items=output_types,
                                          name="Output Type",
                                          description="Controls what type of curve/mesh is generated",
                                          default=BEZIER)
 
     handle_types = [("ALIGNED","Aligned","Points at a fixed crossing angle"),
                     ("AUTO","Auto","Automatic control points")]
-    handle_type = bpy.props.EnumProperty(items=handle_types,
+    handle_type: bpy.props.EnumProperty(items=handle_types,
                                          name="Handle Type",
                                          description="Controls what type the bezier control points use",
                                          default="AUTO")
-    crossing_angle = bpy.props.FloatProperty(name="Crossing Angle",
+    crossing_angle: bpy.props.FloatProperty(name="Crossing Angle",
                                              description="Aligned only: the angle between curves in a knot",
                                              default=pi/4,
                                              min=0,max=pi/2,
                                              subtype="ANGLE",
                                              unit="ROTATION")
-    crossing_strength = bpy.props.FloatProperty(name="Crossing Strength",
+    crossing_strength: bpy.props.FloatProperty(name="Crossing Strength",
                                                 description="Aligned only: strenth of bezier control points",
                                                 soft_min=0,
                                                 subtype="DISTANCE",
                                                 unit="LENGTH")
-    thickness = bpy.props.FloatProperty(name="Thickness",
+    thickness: bpy.props.FloatProperty(name="Thickness",
                                         description="Radius of tube around curve (zero disables)",
                                         soft_min=0,
                                         subtype="DISTANCE",
                                         unit="LENGTH")
-    length = bpy.props.FloatProperty(name="Length",
+    length: bpy.props.FloatProperty(name="Length",
                                      description="Percent along faces that the ribbon runs parallel",
                                      subtype="PERCENTAGE",
                                      unit="NONE",
                                      default=0.9,
                                      soft_min=0.0,
                                      soft_max=1.0)
-    breadth = bpy.props.FloatProperty(name="Breadth",
+    breadth: bpy.props.FloatProperty(name="Breadth",
                                       description="Ribbon width as a percentage across faces.",
                                       subtype="PERCENTAGE",
                                       unit="NONE",
@@ -858,7 +853,7 @@ class CelticKnotOperator(bpy.types.Operator):
     coloring_types = [("NONE", "None", "No colors"),
                       ("STRAND", "Per strand", "Assign a unique material to every strand."),
                       ("BRAID", "Per braid", "Use as few materials as possible while preserving crossings.")]
-    coloring_type = bpy.props.EnumProperty(items=coloring_types,
+    coloring_type: bpy.props.EnumProperty(items=coloring_types,
                                          name="Coloring",
                                          description="Controls what materials are assigned to the created object",
                                          default="NONE")
@@ -952,7 +947,7 @@ class GeometricRemeshOperator(bpy.types.Operator):
     bl_label = "Geometric Remesh"
     bl_options = {'REGISTER', 'UNDO'}
 
-    remesh_type = bpy.props.EnumProperty(items=[t for t in REMESH_TYPES if t[0] != "NONE"],
+    remesh_type: bpy.props.EnumProperty(items=[t for t in REMESH_TYPES if t[0] != "NONE"],
                                          name="Remesh Type",
                                          description="Pre-process the mesh before weaving",
                                          default="EDGE_SUBDIVIDE")
@@ -980,13 +975,16 @@ def menu_func(self, context):
 
 
 def register():
-    bpy.utils.register_module(__name__)
-    bpy.types.INFO_MT_curve_add.append(menu_func)
+    bpy.utils.register_class(CelticKnotOperator)
+    bpy.utils.register_class(GeometricRemeshOperator)
+    bpy.types.VIEW3D_MT_curve_add.append(menu_func)
 
 
 def unregister():
-    bpy.types.INFO_MT_curve_add.remove(menu_func)
-    bpy.utils.unregister_module(__name__)
+    bpy.types.VIEW3D_MT_curve_add.remove(menu_func)
+    bpy.utils.unregister_class(GeometricRemeshOperator)
+    bpy.utils.unregister_class(CelticKnotOperator)
+    
 
 
 if __name__ == "__main__":
